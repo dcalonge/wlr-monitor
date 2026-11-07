@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,7 +124,10 @@ def test_profiles_command_launches_browser(tmp_path: Path) -> None:
         def run(self) -> None:
             captured["ran"] = True
 
-    with patch.object(cli, "WlrMonitorApp", DummyApp):
+    with (
+        patch("wlr_monitor.app.WlrMonitorApp", DummyApp),
+        patch.object(cli.WlrRandr, "read_outputs", return_value=load_outputs()),
+    ):
         assert cli.main(["profiles", "--config", str(tmp_path / "p.json")]) == 0
 
     assert captured["profiles_only"] is True
@@ -139,10 +144,52 @@ def test_profiles_flag_launches_browser(tmp_path: Path) -> None:
         def run(self) -> None:
             captured["ran"] = True
 
-    with patch.object(cli, "WlrMonitorApp", DummyApp):
+    with (
+        patch("wlr_monitor.app.WlrMonitorApp", DummyApp),
+        patch.object(cli.WlrRandr, "read_outputs", return_value=load_outputs()),
+    ):
         assert cli.main(["--profiles", "--config", str(tmp_path / "p.json")]) == 0
 
     assert captured["profiles_only"] is True
+
+
+def test_tui_reads_outputs_while_the_app_starts(tmp_path: Path) -> None:
+    """Outputs are read in the background and handed to the app."""
+    captured: dict[str, object] = {}
+
+    class DummyApp:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def run(self) -> None:
+            pass
+
+    with (
+        patch("wlr_monitor.app.WlrMonitorApp", DummyApp),
+        patch.object(cli.WlrRandr, "read_outputs", return_value=load_outputs()),
+    ):
+        assert cli.main(["--config", str(tmp_path / "p.json")]) == 0
+        pending = captured["pending_outputs"]
+        outputs = pending.result()  # type: ignore[attr-defined]
+
+    assert [output.name for output in outputs] == ["HDMI-A-1", "eDP-1"]
+
+
+def test_one_shot_commands_do_not_import_textual(tmp_path: Path) -> None:
+    code = (
+        "import sys; from wlr_monitor import cli; "
+        f"cli.main(['--config', {str(tmp_path / 'p.json')!r}, '--list-profiles']); "
+        "sys.exit('textual' in sys.modules)"
+    )
+    src = Path(cli.__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        env={"PYTHONPATH": str(src), "PATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_apply_profile_uses_hardware_id_fallback(tmp_path: Path, capsys) -> None:

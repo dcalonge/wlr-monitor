@@ -11,6 +11,7 @@ from textual.screen import Screen
 
 from .compositor import (
     Backend,
+    Background,
     Capabilities,
     Compositor,
     CompositorError,
@@ -305,6 +306,7 @@ class WlrMonitorApp(App[None]):
         store: ProfileStore | None = None,
         *,
         initial_outputs: list[Output] | None = None,
+        pending_outputs: Background[list[Output]] | None = None,
         profiles_only: bool = False,
     ) -> None:
         super().__init__(ansi_color=True)
@@ -313,6 +315,9 @@ class WlrMonitorApp(App[None]):
         self.backend = backend if backend is not None else Backend()
         self.store = store if store is not None else ProfileStore()
         self._initial_outputs = initial_outputs
+        # A backend.read_outputs() call already started by the caller, used
+        # instead of reading again on mount (see cli.main).
+        self._pending_outputs = pending_outputs
         self._profiles_only = profiles_only
         self.outputs: list[Output] = []
         self.baseline: dict[str, dict[str, Any]] = {}
@@ -357,8 +362,9 @@ class WlrMonitorApp(App[None]):
         self.query_one(HelpBar).set_items(MAIN_HELP)
         if self._initial_outputs is not None:
             self._set_outputs(self._initial_outputs)
-        elif self._reload_from_backend():
+        elif self._reload_from_backend(pending=self._pending_outputs):
             self._ensure_include()
+        self._pending_outputs = None
         if self._profiles_only:
             self.call_after_refresh(self.action_open_profiles)
         hint = self._include_hint()
@@ -505,11 +511,15 @@ class WlrMonitorApp(App[None]):
         title = {"warning": "Warning", "error": "Error"}.get(severity, "Info")
         self.notify(message, title=title, severity=severity, timeout=4)
 
-    def _reload_from_backend(self) -> bool:
+    def _reload_from_backend(
+        self, *, pending: Background[list[Output]] | None = None
+    ) -> bool:
         current = self.current
         current_name = current.name if current is not None else None
         try:
-            outputs = self.backend.read_outputs()
+            outputs = (
+                pending.result() if pending is not None else self.backend.read_outputs()
+            )
         except Exception as exc:  # noqa: BLE001 - wlr-randr errors are user-facing
             self._error = str(exc)
             self._sync()

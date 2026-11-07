@@ -8,10 +8,10 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .app import WlrMonitorApp
 from .compositor import (
     COMPOSITORS,
     Backend,
+    Background,
     CompositorError,
     StateFileError,
     detect_compositor,
@@ -164,10 +164,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wlr-monitor: {exc}", file=sys.stderr)
         return 1
 
+    # Start wlr-randr and the compositor query now, so they run while Textual
+    # is imported and the app starts up instead of after it. The app shows
+    # any error they raise.
+    pending = Background(backend.read_outputs)
+    # Imported here: Textual is most of the startup time and only the TUI
+    # needs it, not the one-shot commands above.
+    from .app import WlrMonitorApp
+
     app = WlrMonitorApp(
         backend=backend,
         store=store,
         profiles_only=args.profiles or args.command == "profiles",
+        pending_outputs=pending,
     )
     app.run()
     return 0

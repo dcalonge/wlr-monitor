@@ -9,7 +9,7 @@ from unittest.mock import patch
 from textual.widgets import Input, OptionList, Static
 
 from wlr_monitor.app import GRID_SIZES, STARTUP_PROFILE, WlrMonitorApp
-from wlr_monitor.compositor import Backend, Mango, Niri, Sway
+from wlr_monitor.compositor import Backend, Background, Mango, Niri, Sway
 from wlr_monitor.layout import SnapMode
 from wlr_monitor.model import Output, OutputState
 from wlr_monitor.profiles import ProfileError, ProfileStore
@@ -32,7 +32,7 @@ from wlr_monitor.widgets import (
     OutputToggled,
     layout_help,
 )
-from wlr_monitor.wlr import ApplyResult
+from wlr_monitor.wlr import ApplyResult, WlrRandrError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -568,6 +568,53 @@ def test_apply_uses_backend_and_updates_baseline(tmp_path: Path) -> None:
             assert backend.applied == ["HDMI-A-1", "HDMI-A-1", "eDP-1"]
             assert app.outputs[0].x == 0
             assert app.dirty_names == set()
+
+    asyncio.run(run())
+
+
+def test_mount_uses_outputs_read_in_the_background(tmp_path: Path) -> None:
+    class CountingBackend(FakeBackend):
+        reads = 0
+
+        def read_outputs(self) -> list[Output]:
+            self.reads += 1
+            return super().read_outputs()
+
+    backend = CountingBackend(load_outputs())
+    app = WlrMonitorApp(
+        backend=backend,
+        store=ProfileStore(tmp_path / "profiles.json"),
+        pending_outputs=Background(lambda: load_outputs()[:1]),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            assert [output.name for output in app.outputs] == ["HDMI-A-1"]
+            assert backend.reads == 0
+            # Later reloads read fresh state from the backend.
+            app.action_reload()
+            assert backend.reads == 1
+            assert [output.name for output in app.outputs] == ["HDMI-A-1", "eDP-1"]
+
+    asyncio.run(run())
+
+
+def test_background_read_errors_are_shown(tmp_path: Path) -> None:
+    def fail() -> list[Output]:
+        raise WlrRandrError("wlr-randr was not found.")
+
+    app = WlrMonitorApp(
+        backend=FakeBackend(load_outputs()),
+        store=ProfileStore(tmp_path / "profiles.json"),
+        pending_outputs=Background(fail),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            assert app.outputs == []
+            assert app.status == "wlr-randr was not found."
 
     asyncio.run(run())
 

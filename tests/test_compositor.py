@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +12,7 @@ import pytest
 
 from wlr_monitor.compositor import (
     Backend,
+    Background,
     Compositor,
     CompositorError,
     Mango,
@@ -341,6 +343,47 @@ def test_sway_reads_hdr_and_vrr_from_ipc(tmp_path: Path) -> None:
     assert outputs[0].hdr is True
     assert outputs[0].adaptive_sync is True
     assert outputs[1].hdr is None
+
+
+def test_backend_queries_the_compositor_while_wlr_randr_runs(tmp_path: Path) -> None:
+    env = make_env(tmp_path, "swaymsg")
+    payload = json.dumps(
+        [{"name": "HDMI-A-1", "hdr": True, "adaptive_sync_status": "enabled"}]
+    )
+    queried = threading.Event()
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        queried.set()
+        return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
+
+    class SlowWlr(FakeWlr):
+        def read_outputs(self) -> list[Output]:
+            # Run one after the other, the query would only start after this.
+            assert queried.wait(timeout=5), "IPC query did not run in parallel"
+            return super().read_outputs()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        outputs = Backend(SlowWlr(), Sway(env=env)).read_outputs()
+    assert outputs[0].hdr is True
+    assert outputs[0].adaptive_sync is True
+
+
+def test_backend_skips_the_thread_without_an_ipc_tool(tmp_path: Path) -> None:
+    env = make_env(tmp_path)
+    with patch("wlr_monitor.compositor.Background") as background:
+        outputs = Backend(FakeWlr(), Sway(env=env)).read_outputs()
+    background.assert_not_called()
+    assert [output.name for output in outputs] == ["HDMI-A-1", "eDP-1"]
+
+
+def test_background_returns_and_reraises() -> None:
+    assert Background(lambda: 42).result() == 42
+
+    def fail() -> None:
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        Background(fail).result()
 
 
 def test_niri_applies_each_setting_with_niri_msg(tmp_path: Path) -> None:
