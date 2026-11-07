@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wlr-randr-tui"
+name = "wlr-monitor"
 version = "0.1.0"
 description = "A terminal monitor-layout editor for wlroots compositors using wlr-randr"
 readme = "README.md"
@@ -28,11 +28,11 @@ dependencies = ["textual>=8.2.5"]
 dev = ["pytest>=8", "ruff>=0.9"]
 
 [project.scripts]
-wlr-randr-tui = "wlr_randr_tui.cli:main"
+wlr-monitor = "wlr_monitor.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/dcalonge/wlr-randr-tui"
-Repository = "https://github.com/dcalonge/wlr-randr-tui"
+Homepage = "https://github.com/dcalonge/wlr-monitor"
+Repository = "https://github.com/dcalonge/wlr-monitor"
 
 [tool.setuptools.packages.find]
 where = ["src"]

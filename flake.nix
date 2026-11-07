@@ -17,8 +17,8 @@
         pkgs:
         let
           python = pkgs.python3;
-          wlr-randr-tui = python.pkgs.buildPythonApplication {
-            pname = "wlr-randr-tui";
+          wlr-monitor = python.pkgs.buildPythonApplication {
+            pname = "wlr-monitor";
             version = "0.1.0";
             format = "pyproject";
             src = ./.;
@@ -38,22 +38,22 @@
             '';
 
             postFixup = ''
-              wrapProgram $out/bin/wlr-randr-tui \
+              wrapProgram $out/bin/wlr-monitor \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.wlr-randr ]}
             '';
 
             meta = {
               description = "A TUI monitor-layout editor for wlroots compositors";
-              homepage = "https://github.com/dcalonge/wlr-randr-tui";
+              homepage = "https://github.com/dcalonge/wlr-monitor";
               license = pkgs.lib.licenses.mit;
-              mainProgram = "wlr-randr-tui";
+              mainProgram = "wlr-monitor";
               platforms = pkgs.lib.platforms.linux;
             };
           };
         in
         {
-          default = wlr-randr-tui;
-          wlr-randr-tui = wlr-randr-tui;
+          default = wlr-monitor;
+          wlr-monitor = wlr-monitor;
         }
       );
 

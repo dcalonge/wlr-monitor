@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from wlr_randr_tui.model import Mode, OutputState
-from wlr_randr_tui.profiles import ProfileError, ProfileStore
+from wlr_monitor.model import Mode, OutputState
+from wlr_monitor.profiles import ProfileError, ProfileStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

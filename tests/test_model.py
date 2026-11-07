@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from wlr_randr_tui.model import (
+from wlr_monitor.model import (
     COMMON_SCALES,
     SCALE_MAX,
     SCALE_MIN,

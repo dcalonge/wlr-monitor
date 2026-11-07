@@ -114,7 +114,7 @@ class ProfileStore:
     def default_path() -> Path:
         config_home = os.environ.get("XDG_CONFIG_HOME")
         base = Path(config_home) if config_home else Path.home() / ".config"
-        return base / "wlr-randr-tui" / "profiles.json"
+        return base / "wlr-monitor" / "profiles.json"
 
     def load(self) -> dict[str, Profile]:
         return self._read().profiles

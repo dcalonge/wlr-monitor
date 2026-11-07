@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from wlr_randr_tui import cli
-from wlr_randr_tui.model import Output, OutputState
-from wlr_randr_tui.profiles import ProfileStore
-from wlr_randr_tui.wlr import ApplyResult, WlrRandrError
+from wlr_monitor import cli
+from wlr_monitor.model import Output, OutputState
+from wlr_monitor.profiles import ProfileStore
+from wlr_monitor.wlr import ApplyResult, WlrRandrError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -122,7 +122,7 @@ def test_profiles_command_launches_browser(tmp_path: Path) -> None:
         def run(self) -> None:
             captured["ran"] = True
 
-    with patch.object(cli, "WlrRandrApp", DummyApp):
+    with patch.object(cli, "WlrMonitorApp", DummyApp):
         assert cli.main(["profiles", "--config", str(tmp_path / "p.json")]) == 0
 
     assert captured["profiles_only"] is True
@@ -139,7 +139,7 @@ def test_profiles_flag_launches_browser(tmp_path: Path) -> None:
         def run(self) -> None:
             captured["ran"] = True
 
-    with patch.object(cli, "WlrRandrApp", DummyApp):
+    with patch.object(cli, "WlrMonitorApp", DummyApp):
         assert cli.main(["--profiles", "--config", str(tmp_path / "p.json")]) == 0
 
     assert captured["profiles_only"] is True

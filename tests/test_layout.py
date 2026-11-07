@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wlr_randr_tui.layout import (
+from wlr_monitor.layout import (
     Guide,
     SnapMode,
     compute_layout,
     snap_position,
 )
-from wlr_randr_tui.model import Mode, Output
+from wlr_monitor.model import Mode, Output
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

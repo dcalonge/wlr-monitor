@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from wlr_randr_tui.model import Mode, Output, OutputState
-from wlr_randr_tui.wlr import WlrRandr
+from wlr_monitor.model import Mode, Output, OutputState
+from wlr_monitor.wlr import WlrRandr
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

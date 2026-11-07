@@ -1,4 +1,4 @@
-"""The wlr-randr-tui Textual application."""
+"""The wlr-monitor Textual application."""
 
 from __future__ import annotations
 
@@ -99,10 +99,10 @@ class MainScreen(Screen[None]):
         self.set_class(event.size.height < TINY_HEIGHT, "-tiny")
 
 
-class WlrRandrApp(App[None]):
+class WlrMonitorApp(App[None]):
     """Interactive monitor layout editor for wlroots compositors."""
 
-    TITLE = "wlr-randr-tui"
+    TITLE = "wlr-monitor"
     SUB_TITLE = "wlroots monitor layout"
 
     CSS = """

@@ -1,4 +1,4 @@
-# wlr-randr-tui
+# wlr-monitor
 
 A terminal monitor-layout editor for **wlroots compositors** (mango, sway,
 niri, River, Labwc, Wayfire, …) built on
@@ -73,12 +73,12 @@ writable include files and adds the include line to the compositor config:
 
 ```nix
 {
-  inputs.wlr-randr-tui.url = "github:dcalonge/wlr-randr-tui";
+  inputs.wlr-monitor.url = "github:dcalonge/wlr-monitor";
 
   # In your Home Manager configuration:
-  imports = [ inputs.wlr-randr-tui.homeModules.default ];
+  imports = [ inputs.wlr-monitor.homeModules.default ];
 
-  programs.wlr-randr-tui = {
+  programs.wlr-monitor = {
     enable = true;
     mango.enable = true; # needs mango's HM module (wayland.windowManager.mango)
     # sway.enable = true; # wayland.windowManager.sway
@@ -94,19 +94,19 @@ via `wayland.windowManager.mango.extraConfig`.
 ## Usage
 
 ```sh
-wlr-randr-tui                       # open the monitor editor
-wlr-randr-tui profiles              # open the profile browser
-wlr-randr-tui --profiles            # same as above
-wlr-randr-tui --active-profile      # print the active profile name
-wlr-randr-tui --list-profiles       # one name per line, * marks the active one
-wlr-randr-tui --list-profiles --json
-wlr-randr-tui --profile work        # apply a saved profile and exit
-wlr-randr-tui --delete-profile old
-wlr-randr-tui --outputs             # print current outputs
-wlr-randr-tui --outputs --json
-wlr-randr-tui --init-include        # write the compositor include, print the line to add
-wlr-randr-tui --print-config work   # print the compositor config for a profile
-wlr-randr-tui --cfg ~/.config/wlr-randr-tui
+wlr-monitor                       # open the monitor editor
+wlr-monitor profiles              # open the profile browser
+wlr-monitor --profiles            # same as above
+wlr-monitor --active-profile      # print the active profile name
+wlr-monitor --list-profiles       # one name per line, * marks the active one
+wlr-monitor --list-profiles --json
+wlr-monitor --profile work        # apply a saved profile and exit
+wlr-monitor --delete-profile old
+wlr-monitor --outputs             # print current outputs
+wlr-monitor --outputs --json
+wlr-monitor --init-include        # write the compositor include, print the line to add
+wlr-monitor --print-config work   # print the compositor config for a profile
+wlr-monitor --cfg ~/.config/wlr-monitor
 ```
 
 `--cfg` accepts either a directory (then `profiles.json` is read inside it) or
@@ -165,11 +165,11 @@ profile from the browser or `--profile`) also writes the full layout to:
 
 | Compositor | Generated file | Line to add to your config |
 | --- | --- | --- |
-| mango | `~/.config/mango/wlr-randr-tui.conf` | `source_optional=~/.config/mango/wlr-randr-tui.conf` |
-| sway | `~/.config/sway/wlr-randr-tui.conf` | `include ~/.config/sway/wlr-randr-tui.conf` |
-| niri | `~/.config/niri/wlr-randr-tui.kdl` | `include "wlr-randr-tui.kdl"` |
+| mango | `~/.config/mango/wlr-monitor.conf` | `source_optional=~/.config/mango/wlr-monitor.conf` |
+| sway | `~/.config/sway/wlr-monitor.conf` | `include ~/.config/sway/wlr-monitor.conf` |
+| niri | `~/.config/niri/wlr-monitor.kdl` | `include "wlr-monitor.kdl"` |
 
-`wlr-randr-tui --init-include` writes the file from the current layout and
+`wlr-monitor --init-include` writes the file from the current layout and
 prints the exact line, and the TUI shows the line at start-up until it is
 present. On niri, which refuses a config whose include does not exist, the
 TUI also creates the file at start-up if it is missing. mango always uses
@@ -177,7 +177,7 @@ TUI also creates the file at start-up if it is missing. mango always uses
 
 Remove your own monitor/output rules for the same monitors: mango and niri
 use a single matching rule (the *first* one at start-up), so leftovers would
-win. Settings wlr-randr-tui does not manage can be moved into the generated
+win. Settings wlr-monitor does not manage can be moved into the generated
 file instead and are kept on every rewrite: extra `monitor_rule` options in
 mango (`hdr_max_lum`, `hdr_force`, `primary`, …) and extra nodes in a niri
 `output` block (`layout {}`, `hot-corners`, `focus-at-startup`,
@@ -193,11 +193,11 @@ over (the remembered state goes with it). `--print-config` shows exactly what
 an apply would write, remembered monitors included.
 
 The generated file is a plain, writable file, so it keeps working when the
-main config is a read-only Nix store symlink. wlr-randr-tui refuses to write
+main config is a read-only Nix store symlink. wlr-monitor refuses to write
 through a symlink. Settings the compositor cannot report back (color profile,
-bit depth) are kept in `~/.local/state/wlr-randr-tui/<compositor>-layout.json`
+bit depth) are kept in `~/.local/state/wlr-monitor/<compositor>-layout.json`
 (a custom `--include` path gets its own state file). If `swaymsg` or `niri` is
-missing, wlr-randr-tui applies with `wlr-randr` instead and skips HDR and
+missing, wlr-monitor applies with `wlr-randr` instead and skips HDR and
 color settings.
 
 | | mango | sway | niri | other wlroots |
@@ -215,7 +215,7 @@ reports `max_bpc`).
 **mango and VRR.** mango keeps adaptive sync in sync with the monitor rule's
 `vrr` value and switches it off again on the next focus change, which is why
 VRR set through `wlr-randr` alone does not stick. Once the include is sourced,
-wlr-randr-tui applies everything by writing the monitor rules and running
+wlr-monitor applies everything by writing the monitor rules and running
 `mmsg dispatch reload_config`, so VRR (and HDR/ICC) work and persist. A config
 reload is a full reload: it re-runs your `exec=` lines, resets per-tag
 master factor / count to the configured defaults and re-creates keyboard and
@@ -227,10 +227,10 @@ cursor settings. Without the include it falls back to `wlr-randr` plus
 Profiles live in:
 
 ```text
-$XDG_CONFIG_HOME/wlr-randr-tui/profiles.json
+$XDG_CONFIG_HOME/wlr-monitor/profiles.json
 ```
 
-which defaults to `~/.config/wlr-randr-tui/profiles.json`. The file keeps an
+which defaults to `~/.config/wlr-monitor/profiles.json`. The file keeps an
 explicit display order and timestamps:
 
 ```json
@@ -275,10 +275,10 @@ fix, overwrite or delete it.
 Applying a profile writes it to the compositor include (see above), so once
 the include line is in your config it is also what the compositor uses after
 a restart — no start-up command needed. On other wlroots compositors, run
-`wlr-randr-tui --profile work` from your startup file or bind it to a key:
+`wlr-monitor --profile work` from your startup file or bind it to a key:
 
 ```text
-bindsym $mod+Shift+p exec wlr-randr-tui --profile work
+bindsym $mod+Shift+p exec wlr-monitor --profile work
 ```
 
 Before modifying an existing profile file, the store writes a timestamped
@@ -287,7 +287,7 @@ created with user-only permissions.
 
 ## Theme
 
-wlr-randr-tui uses a Textual theme built only from the terminal's 16 ANSI
+wlr-monitor uses a Textual theme built only from the terminal's 16 ANSI
 colors and its default foreground/background, like impala and bluetui. Change
 your terminal theme (for example foot's `[colors]` section) and the TUI follows
 it. `NO_COLOR` is respected.

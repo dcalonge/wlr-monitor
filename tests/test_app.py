@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 from textual.widgets import Input, OptionList, Static
 
-from wlr_randr_tui.app import GRID_SIZES, STARTUP_PROFILE, WlrRandrApp
-from wlr_randr_tui.compositor import Backend, Mango, Niri, Sway
-from wlr_randr_tui.layout import SnapMode
-from wlr_randr_tui.model import Output, OutputState
-from wlr_randr_tui.profiles import ProfileError, ProfileStore
-from wlr_randr_tui.screens import (
+from wlr_monitor.app import GRID_SIZES, STARTUP_PROFILE, WlrMonitorApp
+from wlr_monitor.compositor import Backend, Mango, Niri, Sway
+from wlr_monitor.layout import SnapMode
+from wlr_monitor.model import Output, OutputState
+from wlr_monitor.profiles import ProfileError, ProfileStore
+from wlr_monitor.screens import (
     AdvancedSettingsScreen,
     ChoiceScreen,
     ConfirmScreen,
@@ -21,7 +21,7 @@ from wlr_randr_tui.screens import (
     ProfileScreen,
     TextPrompt,
 )
-from wlr_randr_tui.widgets import (
+from wlr_monitor.widgets import (
     DetailsPanel,
     DragFinished,
     HelpItem,
@@ -32,7 +32,7 @@ from wlr_randr_tui.widgets import (
     OutputToggled,
     layout_help,
 )
-from wlr_randr_tui.wlr import ApplyResult
+from wlr_monitor.wlr import ApplyResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -44,7 +44,7 @@ def load_outputs() -> list[Output]:
 
 def test_app_loads_outputs_moves_and_uses_hyprmon_defaults(tmp_path: Path) -> None:
     outputs = load_outputs()
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=outputs,
     )
@@ -85,7 +85,7 @@ def test_app_loads_outputs_moves_and_uses_hyprmon_defaults(tmp_path: Path) -> No
 
 
 def test_grid_and_snap_keys_cycle_like_hyprmon(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -113,7 +113,7 @@ def test_grid_and_snap_keys_cycle_like_hyprmon(tmp_path: Path) -> None:
 
 
 def test_scale_stepping_clamps_to_hyprmon_range(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -141,7 +141,7 @@ def test_scale_stepping_clamps_to_hyprmon_range(tmp_path: Path) -> None:
 
 def test_last_active_monitor_cannot_be_disabled(tmp_path: Path) -> None:
     outputs = load_outputs()
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=outputs,
     )
@@ -164,7 +164,7 @@ def test_last_active_monitor_cannot_be_disabled(tmp_path: Path) -> None:
 
 
 def test_single_output_cannot_be_disabled(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=[load_outputs()[0]],
     )
@@ -180,7 +180,7 @@ def test_single_output_cannot_be_disabled(tmp_path: Path) -> None:
 
 
 def test_advanced_dialog_applies_and_cancels(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -217,7 +217,7 @@ def test_advanced_dialog_applies_and_cancels(tmp_path: Path) -> None:
 
 
 def test_help_blocks_shortcuts(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -245,7 +245,7 @@ def sway_backend(tmp_path: Path) -> Backend:
 
 
 def test_advanced_dialog_offers_compositor_color_settings(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         backend=sway_backend(tmp_path),
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
@@ -295,7 +295,7 @@ def test_advanced_dialog_offers_compositor_color_settings(tmp_path: Path) -> Non
 
 
 def test_generic_backend_marks_color_settings_unsupported(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -325,7 +325,7 @@ def test_apply_warnings_are_notified(tmp_path: Path) -> None:
     path = tmp_path / "profiles.json"
     store = ProfileStore(path)
     store.save("desk", [output.state() for output in load_outputs()])
-    app = WlrRandrApp(backend=backend, store=store)
+    app = WlrMonitorApp(backend=backend, store=store)
 
     async def run() -> None:
         async with app.run_test(size=(110, 34), notifications=True) as pilot:
@@ -342,7 +342,7 @@ def test_apply_warnings_are_notified(tmp_path: Path) -> None:
 
 
 def test_small_terminals_hide_secondary_sections(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -380,7 +380,7 @@ def test_help_bar_wraps_and_drops_low_priority_items() -> None:
 
 
 def test_theme_uses_terminal_ansi_colors(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -406,7 +406,7 @@ def test_theme_uses_terminal_ansi_colors(tmp_path: Path) -> None:
 
 def test_app_saves_profiles_and_marks_active(tmp_path: Path) -> None:
     path = tmp_path / "profiles.json"
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(path),
         initial_outputs=load_outputs(),
     )
@@ -455,7 +455,7 @@ def test_app_saves_profiles_and_marks_active(tmp_path: Path) -> None:
 
 def test_startup_profile_overwrite_confirmation(tmp_path: Path) -> None:
     path = tmp_path / "profiles.json"
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(path),
         initial_outputs=load_outputs(),
     )
@@ -481,7 +481,7 @@ def test_startup_profile_overwrite_confirmation(tmp_path: Path) -> None:
 
 
 def test_profiles_only_launches_browser_and_editor(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
         profiles_only=True,
@@ -501,7 +501,7 @@ def test_profiles_only_launches_browser_and_editor(tmp_path: Path) -> None:
 
 
 def test_output_mouse_messages_are_wired(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -545,7 +545,7 @@ class FakeBackend:
 
 def test_apply_uses_backend_and_updates_baseline(tmp_path: Path) -> None:
     backend = FakeBackend(load_outputs())
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         backend=backend,
         store=ProfileStore(tmp_path / "profiles.json"),
     )
@@ -573,7 +573,7 @@ def test_apply_uses_backend_and_updates_baseline(tmp_path: Path) -> None:
 
 
 def test_mode_and_scale_pickers(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -604,7 +604,7 @@ def test_mode_and_scale_pickers(tmp_path: Path) -> None:
 def test_corrupt_profile_file_does_not_crash_browser(tmp_path: Path) -> None:
     path = tmp_path / "profiles.json"
     path.write_text("{ nope")
-    app = WlrRandrApp(store=ProfileStore(path), initial_outputs=load_outputs())
+    app = WlrMonitorApp(store=ProfileStore(path), initial_outputs=load_outputs())
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
@@ -621,7 +621,7 @@ def test_corrupt_profile_file_does_not_crash_browser(tmp_path: Path) -> None:
 
 
 def test_mouse_click_and_right_click_on_layout_map(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -655,7 +655,7 @@ def test_mouse_click_and_right_click_on_layout_map(tmp_path: Path) -> None:
 def test_layout_map_receives_guides_and_draws_disabled_outputs(
     tmp_path: Path,
 ) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -688,7 +688,7 @@ def test_profile_browser_reorders_profiles(tmp_path: Path) -> None:
     moved[0].x = 1920
     store.save("home", moved)
 
-    app = WlrRandrApp(store=ProfileStore(path), initial_outputs=outputs)
+    app = WlrMonitorApp(store=ProfileStore(path), initial_outputs=outputs)
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
@@ -711,17 +711,17 @@ def test_startup_creates_missing_include_and_shows_hint(tmp_path: Path) -> None:
     home = tmp_path / "home"
     env = {"HOME": str(home), "PATH": str(tmp_path / "bin")}
     backend = Backend(FakeBackend(load_outputs()), Niri(env=env))  # type: ignore[arg-type]
-    app = WlrRandrApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
+    app = WlrMonitorApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
 
     async def run() -> None:
         async with app.run_test(size=(110, 34), notifications=True) as pilot:
             await pilot.pause()
-            include = home / ".config" / "niri" / "wlr-randr-tui.kdl"
+            include = home / ".config" / "niri" / "wlr-monitor.kdl"
             # niri rejects a missing include, so the file must exist first.
             assert include.exists()
             assert 'output "Microstep MSI MP275 PC3M394200857" {' in include.read_text()
             messages = [item.message for item in app._notifications]
-            assert any("wlr-randr-tui.kdl" in message for message in messages)
+            assert any("wlr-monitor.kdl" in message for message in messages)
 
     asyncio.run(run())
 
@@ -732,12 +732,12 @@ def test_startup_never_writes_the_mango_include(tmp_path: Path) -> None:
     home = tmp_path / "home"
     env = {"HOME": str(home), "PATH": str(tmp_path / "bin")}
     backend = Backend(FakeBackend(load_outputs()), Mango(env=env))  # type: ignore[arg-type]
-    app = WlrRandrApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
+    app = WlrMonitorApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
             await pilot.pause()
-            assert not (home / ".config" / "mango" / "wlr-randr-tui.conf").exists()
+            assert not (home / ".config" / "mango" / "wlr-monitor.conf").exists()
 
     asyncio.run(run())
 
@@ -751,7 +751,7 @@ def test_profiles_from_other_compositors_show_no_phantom_changes(
     states[0].bit_depth = 10
     store.save("sway-hdr", states)
     backend = FakeBackend(load_outputs())
-    app = WlrRandrApp(backend=backend, store=store)
+    app = WlrMonitorApp(backend=backend, store=store)
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
@@ -766,7 +766,7 @@ def test_profiles_from_other_compositors_show_no_phantom_changes(
 
 
 def test_rotation_is_named_consistently(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
     )
@@ -789,7 +789,7 @@ def test_rotation_is_named_consistently(tmp_path: Path) -> None:
 
 
 def test_advanced_dialog_cannot_disable_the_last_monitor(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=[load_outputs()[0]],
     )
@@ -814,7 +814,7 @@ def test_apply_refuses_to_turn_off_every_monitor(tmp_path: Path) -> None:
     for state in dark:
         state.enabled = False
     store.save("dark", dark)
-    app = WlrRandrApp(backend=backend, store=store)
+    app = WlrMonitorApp(backend=backend, store=store)
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
@@ -831,7 +831,7 @@ def test_profile_browser_survives_write_errors(tmp_path: Path) -> None:
     store = ProfileStore(path)
     store.save("work", [output.state() for output in load_outputs()])
     store.save("home", [output.state() for output in load_outputs()])
-    app = WlrRandrApp(store=store, initial_outputs=load_outputs())
+    app = WlrMonitorApp(store=store, initial_outputs=load_outputs())
     failure = ProfileError("Could not write profiles.json: disk full")
 
     async def run() -> None:
@@ -876,7 +876,7 @@ def test_startup_profile_overwrite_asks_even_if_broken(tmp_path: Path) -> None:
     raw = json.loads(path.read_text())
     raw["profiles"][STARTUP_PROFILE]["outputs"]["HDMI-A-1"]["transform"] = "bogus"
     path.write_text(json.dumps(raw))
-    app = WlrRandrApp(store=store, initial_outputs=load_outputs())
+    app = WlrMonitorApp(store=store, initial_outputs=load_outputs())
 
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
@@ -889,7 +889,7 @@ def test_startup_profile_overwrite_asks_even_if_broken(tmp_path: Path) -> None:
 
 
 def test_icc_prompt_expands_home_and_rejects_relative_paths(tmp_path: Path) -> None:
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         backend=sway_backend(tmp_path),
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),

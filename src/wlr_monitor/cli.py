@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .app import WlrRandrApp
+from .app import WlrMonitorApp
 from .compositor import (
     COMPOSITORS,
     Backend,
@@ -23,7 +23,7 @@ from .wlr import WlrRandr, WlrRandrError
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="wlr-randr-tui",
+        prog="wlr-monitor",
         description="A terminal monitor-layout editor for wlroots compositors.",
     )
     parser.add_argument(
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "profile file or directory "
-            "(default: $XDG_CONFIG_HOME/wlr-randr-tui/profiles.json)"
+            "(default: $XDG_CONFIG_HOME/wlr-monitor/profiles.json)"
         ),
     )
     parser.add_argument(
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "generated compositor config file "
-            "(default: ~/.config/<compositor>/wlr-randr-tui.{conf,kdl})"
+            "(default: ~/.config/<compositor>/wlr-monitor.{conf,kdl})"
         ),
     )
     parser.add_argument(
@@ -161,10 +161,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.init_include:
             return _init_include(backend)
     except (WlrRandrError, ProfileError, CompositorError) as exc:
-        print(f"wlr-randr-tui: {exc}", file=sys.stderr)
+        print(f"wlr-monitor: {exc}", file=sys.stderr)
         return 1
 
-    app = WlrRandrApp(
+    app = WlrMonitorApp(
         backend=backend,
         store=store,
         profiles_only=args.profiles or args.command == "profiles",
@@ -193,7 +193,7 @@ def _active_profile(store: ProfileStore, backend: Backend) -> str | None:
 def _list_profiles(store: ProfileStore, backend: Backend, *, as_json: bool) -> int:
     names = store.names()
     for problem in store.problems():
-        print(f"wlr-randr-tui: skipped {problem}", file=sys.stderr)
+        print(f"wlr-monitor: skipped {problem}", file=sys.stderr)
     try:
         active = _active_profile(store, backend)
     except (WlrRandrError, ProfileError):
@@ -221,7 +221,7 @@ def _delete_profile(store: ProfileStore, name: str) -> int:
     if store.delete(name):
         print(f"Deleted profile {name!r}.")
         return 0
-    print(f"wlr-randr-tui: no profile named {name!r}", file=sys.stderr)
+    print(f"wlr-monitor: no profile named {name!r}", file=sys.stderr)
     return 1
 
 
@@ -282,7 +282,7 @@ def _apply_profile(backend: Backend, store: ProfileStore, name: str) -> int:
     if profile is None:
         available = ", ".join(store.names()) or "none"
         print(
-            f"wlr-randr-tui: no profile named {name!r} (available: {available})",
+            f"wlr-monitor: no profile named {name!r} (available: {available})",
             file=sys.stderr,
         )
         return 1
@@ -303,13 +303,13 @@ def _apply_profile(backend: Backend, store: ProfileStore, name: str) -> int:
 
     if not states:
         print(
-            f"wlr-randr-tui: profile {name!r} does not match any connected output.",
+            f"wlr-monitor: profile {name!r} does not match any connected output.",
             file=sys.stderr,
         )
         return 1
     if disables_everything(live_enabled, states):
         print(
-            f"wlr-randr-tui: refusing to apply {name!r}: it would turn off every "
+            f"wlr-monitor: refusing to apply {name!r}: it would turn off every "
             "connected monitor.",
             file=sys.stderr,
         )
@@ -345,7 +345,7 @@ def _print_config(backend: Backend, store: ProfileStore, name: str | None) -> in
     compositor = backend.compositor
     if not compositor.supports_include:
         print(
-            "wlr-randr-tui: the generic wlroots backend has no config format; "
+            "wlr-monitor: the generic wlroots backend has no config format; "
             "use --compositor mango|sway|niri.",
             file=sys.stderr,
         )
@@ -354,7 +354,7 @@ def _print_config(backend: Backend, store: ProfileStore, name: str | None) -> in
     if name is not None:
         profile = store.get(name)
         if profile is None:
-            print(f"wlr-randr-tui: no profile named {name!r}", file=sys.stderr)
+            print(f"wlr-monitor: no profile named {name!r}", file=sys.stderr)
             return 1
         for output in outputs:
             state = _matching_state(profile, output, outputs)
@@ -371,14 +371,14 @@ def _init_include(backend: Backend) -> int:
     compositor = backend.compositor
     if not compositor.supports_include:
         print(
-            "wlr-randr-tui: no compositor integration detected; "
+            "wlr-monitor: no compositor integration detected; "
             "use --compositor mango|sway|niri.",
             file=sys.stderr,
         )
         return 1
     if not compositor.write_include_enabled:
         print(
-            "wlr-randr-tui: --init-include conflicts with --no-include.",
+            "wlr-monitor: --init-include conflicts with --no-include.",
             file=sys.stderr,
         )
         return 1
