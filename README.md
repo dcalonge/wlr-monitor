@@ -4,18 +4,16 @@ A terminal monitor-layout editor for **wlroots compositors** (mango, sway,
 niri, River, Labwc, Wayfire, …) built on
 [`wlr-randr`](https://gitlab.freedesktop.org/emersion/wlr-randr).
 
-It is a TUI in the spirit of [hyprmon](https://github.com/erans/hyprmon). The
-layout itself goes through the standard `wlr-output-management-unstable-v1`
+The layout goes through the standard `wlr-output-management-unstable-v1`
 protocol, so it works anywhere `wlr-randr` works. On **mango**, **sway** and
 **niri** it also uses the compositor's own IPC (`mmsg`, `swaymsg`,
 `niri msg`) for the settings the protocol cannot express (HDR, color depth,
 color profiles, mango's VRR) and writes the applied layout to a config file
 you include from your compositor config, so it survives restarts.
 
-The interface follows [impala](https://github.com/pythops/impala) and
-[bluetui](https://github.com/pythops/bluetui): stacked sections that keep
-working in narrow or floating windows, and only the terminal's ANSI colors,
-so it matches your foot / kitty / alacritty theme without configuration.
+The interface is made of stacked sections that keep working in narrow or
+floating windows, and uses only the terminal's ANSI colors, so it matches your
+foot / kitty / alacritty theme without configuration.
 
 ```text
  ┏━ Layout ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -284,13 +282,6 @@ bindsym $mod+Shift+p exec wlr-monitor --profile work
 Before modifying an existing profile file, the store writes a timestamped
 backup next to it (`profiles.json.bak.<epoch>`). The file and its directory are
 created with user-only permissions.
-
-## Theme
-
-wlr-monitor uses a Textual theme built only from the terminal's 16 ANSI
-colors and its default foreground/background, like impala and bluetui. Change
-your terminal theme (for example foot's `[colors]` section) and the TUI follows
-it. `NO_COLOR` is respected.
 
 ## Limitations
 
