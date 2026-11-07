@@ -1,0 +1,67 @@
+[
+  {
+    "name": "HDMI-A-1",
+    "description": "Microstep MSI MP275 PC3M394200857 (HDMI-A-1)",
+    "make": "Microstep",
+    "model": "MSI MP275",
+    "serial": "PC3M394200857",
+    "physical_size": { "width": 600, "height": 330 },
+    "enabled": true,
+    "modes": [
+      {
+        "width": 1920,
+        "height": 1080,
+        "refresh": 60.0,
+        "preferred": true,
+        "current": false
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "refresh": 100.0,
+        "preferred": false,
+        "current": true
+      },
+      {
+        "width": 1280,
+        "height": 720,
+        "refresh": 59.939999,
+        "preferred": false,
+        "current": false
+      }
+    ],
+    "position": { "x": 0, "y": 0 },
+    "transform": "normal",
+    "scale": 1.0,
+    "adaptive_sync": false
+  },
+  {
+    "name": "eDP-1",
+    "description": "BOE 0x0A1F (eDP-1)",
+    "make": "BOE",
+    "model": "0x0A1F",
+    "serial": "",
+    "physical_size": { "width": 344, "height": 194 },
+    "enabled": true,
+    "modes": [
+      {
+        "width": 1920,
+        "height": 1080,
+        "refresh": 60.0,
+        "preferred": true,
+        "current": true
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "refresh": 59.939999,
+        "preferred": false,
+        "current": false
+      }
+    ],
+    "position": { "x": 1920, "y": 0 },
+    "transform": "normal",
+    "scale": 1.2,
+    "adaptive_sync": true
+  }
+]
