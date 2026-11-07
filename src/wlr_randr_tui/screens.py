@@ -1,7 +1,13 @@
-"""Modal screens used by the TUI."""
+"""Modal screens used by the TUI.
+
+Dialogs are drawn like impala / bluetui popups: centered, a heavy green
+border with the title in it, and a short key hint at the bottom.
+"""
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
 from typing import ClassVar
 
 from rich.text import Text
@@ -13,12 +19,13 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
+from .compositor import Capabilities, color_profile_label
 from .model import TRANSFORMS, Output, OutputState
 from .profiles import ProfileError, ProfileStore
 
 HELP_TEXT = """\
 [b]Move[/b]
-  arrows / hjkl          move by the grid size
+  ←↓↑→ / hjkl            move by the grid size
   Shift + arrows         move by 10× the grid size
   g                      cycle grid size (1, 8, 16, 32, 64 px)
   L                      cycle snap mode (Off, Edges, Centers, Both)
@@ -28,14 +35,13 @@ HELP_TEXT = """\
   r                      pick scale (0.50x – 3.00x, custom)
   [ / ]                  decrease / increase scale by 0.05
   f                      pick resolution and refresh rate
-  t                      pick transform / rotation
+  t                      pick rotation
   v                      toggle adaptive sync (VRR)
-  c / d                  advanced display settings
-  m                      mirroring (informational; not supported)
-  space / Enter          enable / disable the selected output
+  c / d                  advanced settings (HDR, color depth, color profile)
+  Space / Enter          enable / disable the selected output
 
 [b]Layout[/b]
-  a                      apply pending changes with wlr-randr
+  a                      apply pending changes
   Ctrl+R                 reload outputs, discarding pending changes
   z                      reset pending changes to the last applied state
   Z                      revert to the layout before the last apply
@@ -57,12 +63,6 @@ HELP_TEXT = """\
 [b]Other[/b]
   ?                      show this help
   q / Ctrl+C             quit
-
-[b]Not available through wlr-randr[/b]
-  Mirroring, HDR, colour depth, colour management and SDR
-  brightness/saturation are compositor features. wlr-randr does
-  not expose them, so this tool cannot change them. Use wlr-randr
-  for everything in the wlr-output-management protocol.
 """
 
 
@@ -70,6 +70,12 @@ class DialogStatic(Static):
     """A focusable Static used to trap keys inside a modal dialog."""
 
     can_focus = True
+
+
+def _dialog(title: str, classes: str = "") -> Vertical:
+    container = Vertical(classes=f"dialog {classes}".strip())
+    container.border_title = title
+    return container
 
 
 class ChoiceScreen(ModalScreen[str | None]):
@@ -94,15 +100,14 @@ class ChoiceScreen(ModalScreen[str | None]):
         self.selected = selected
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog"):
-            yield Static(self.dialog_title, classes="dialog-title")
+        with _dialog(self.dialog_title, "choice-dialog"):
             if self.subtitle:
-                yield Static(self.subtitle, classes="dialog-subtitle")
+                yield Static(self.subtitle, classes="dialog-subtitle", markup=False)
             yield OptionList(
                 *[Option(label, id=option_id) for option_id, label in self.choices],
                 id="choice-list",
             )
-            yield Static("Enter select  ·  Esc cancel", classes="dialog-help")
+            yield Static("[b]↵[/b] Select | [b]Esc[/b] Cancel", classes="dialog-help")
 
     def on_mount(self) -> None:
         option_list = self.query_one(OptionList)
@@ -132,12 +137,11 @@ class TextPrompt(ModalScreen[str | None]):
         self.value = value
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog prompt-dialog"):
-            yield Static(self.dialog_title, classes="dialog-title")
+        with _dialog(self.dialog_title, "prompt-dialog"):
             yield Input(
                 value=self.value, placeholder=self.placeholder, id="prompt-input"
             )
-            yield Static("Enter confirm  ·  Esc cancel", classes="dialog-help")
+            yield Static("[b]↵[/b] Confirm | [b]Esc[/b] Cancel", classes="dialog-help")
 
     def on_mount(self) -> None:
         prompt = self.query_one(Input)
@@ -168,10 +172,12 @@ class ConfirmScreen(ModalScreen[bool]):
         self.message = message
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog prompt-dialog"):
-            yield Static(self.dialog_title, classes="dialog-title")
+        with _dialog(self.dialog_title, "prompt-dialog"):
             yield DialogStatic(self.message, markup=False)
-            yield Static("Y confirm  ·  N / Esc cancel", classes="dialog-help")
+            yield Static(
+                "[b]y[/b] Yes | [b]n[/b] No | [b]Esc[/b] Cancel",
+                classes="dialog-help",
+            )
 
     def on_mount(self) -> None:
         self.query_one(DialogStatic).focus()
@@ -184,11 +190,10 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class AdvancedSettingsScreen(ModalScreen[bool]):
-    """Transform / VRR / on-off settings available through wlr-randr.
+    """Rotation, VRR, on/off and the compositor-specific color settings.
 
-    hyprmon also exposes colour depth, colour management, HDR and SDR
-    controls. Those are Hyprland-only features; wlr-randr has no equivalent,
-    so they are shown here as unavailable instead of silently ignored.
+    HDR, color depth and color profiles are only offered when the running
+    compositor integration supports them (see ``compositor.Capabilities``).
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
@@ -196,153 +201,241 @@ class AdvancedSettingsScreen(ModalScreen[bool]):
         Binding("enter", "apply", "Apply", show=False),
         Binding("up,k,shift+tab", "focus_previous", show=False),
         Binding("down,j,tab", "focus_next", show=False),
-        Binding("left", "adjust(-1)", show=False),
-        Binding("right", "adjust(1)", show=False),
+        Binding("left,h", "adjust(-1)", show=False),
+        Binding("right,l", "adjust(1)", show=False),
         Binding("space", "toggle", show=False),
         Binding("t", "cycle_transform", show=False),
         Binding("v", "toggle_vrr", show=False),
+        Binding("i", "pick_icc", show=False),
     ]
 
-    FIELDS = ("transform", "vrr", "enabled")
-
-    def __init__(self, output: Output) -> None:
+    def __init__(
+        self,
+        output: Output,
+        capabilities: Capabilities | None = None,
+        *,
+        compositor_label: str = "wlroots",
+        color_ok: Callable[[str], bool] | None = None,
+        can_disable: bool = True,
+    ) -> None:
         super().__init__()
         self.output = output
+        self.capabilities = capabilities or Capabilities()
+        self.compositor_label = compositor_label
+        self.color_ok = color_ok or (lambda value: True)
+        # False when this is the only enabled output (same rule as Space).
+        self.can_disable = can_disable
+        fields = ["transform", "vrr", "enabled"]
+        if self.capabilities.hdr:
+            fields.append("hdr")
+        if self.capabilities.bit_depths:
+            fields.append("bit_depth")
+        if self.capabilities.color_profile:
+            fields.append("color")
+        self.fields = tuple(fields)
         self.focus_index = 0
         self._snapshot = (
             output.transform,
             output.adaptive_sync,
             output.enabled,
+            output.hdr,
+            output.bit_depth,
+            output.color_profile,
         )
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog advanced-dialog"):
-            yield Static("Advanced display settings", classes="dialog-title")
+        with _dialog(f"Advanced · {self.output.name}", "advanced-dialog"):
             yield DialogStatic("", id="advanced-body")
-            yield Static(
-                "Tab/↑↓ navigate  ·  ←→ adjust  ·  Space toggle  ·  Enter apply  ·  Esc cancel",
-                classes="dialog-help",
+            hint = (
+                "[b]↑↓[/b] Nav | [b]←→[/b] Adjust | [b]Space[/b] Toggle | "
+                "[b]↵[/b] Done | [b]Esc[/b] Cancel"
             )
+            if self.capabilities.icc:
+                hint += " | [b]i[/b] ICC file"
+            yield Static(hint, classes="dialog-help")
 
     def on_mount(self) -> None:
         body = self.query_one("#advanced-body", DialogStatic)
         body.focus()
         self._refresh()
 
+    def _value(self, field: str) -> tuple[str, str]:
+        output = self.output
+        if field == "transform":
+            return "Rotation", output.transform
+        if field == "vrr":
+            return "VRR", "On" if output.adaptive_sync else "Off"
+        if field == "enabled":
+            return "Output", "On" if output.enabled else "Off"
+        if field == "hdr":
+            if output.hdr is None:
+                return "HDR", "default"
+            return "HDR", "On" if output.hdr else "Off"
+        if field == "bit_depth":
+            depth = output.bit_depth
+            return "Color depth", f"{depth} bit" if depth else "default"
+        return "Color profile", color_profile_label(output.color_profile)
+
     def _refresh(self) -> None:
         text = Text()
-        text.append(f"{self.output.name}\n", style="bold")
         if self.output.title and self.output.title != self.output.name:
-            text.append(f"{self.output.title}\n", style="dim")
-        text.append("\n")
+            text.append(f"{self.output.title}\n\n", style="dim")
 
-        for index, field in enumerate(self.FIELDS):
+        for index, field in enumerate(self.fields):
             focused = index == self.focus_index
-            label_style = "bold yellow" if focused else "dim"
-            value_style = "yellow" if focused else "white"
-            if field == "transform":
-                label = "Transform"
-                value = self.output.transform
-            elif field == "vrr":
-                label = "Adaptive sync"
-                value = "On" if self.output.adaptive_sync else "Off"
-            else:
-                label = "Output"
-                value = "On" if self.output.enabled else "Off"
-            text.append(f"  {label:<16}", style=label_style)
-            text.append(f"{value}\n", style=value_style)
+            label, value = self._value(field)
+            marker = "▸ " if focused else "  "
+            line = Text(no_wrap=True, overflow="ellipsis")
+            line.append(marker, style="bold")
+            line.append(f"{label:<16}", style="bold yellow" if focused else "bold")
+            line.append(value, style="" if focused else "dim")
+            if focused:
+                line.stylize("on bright_black")
+            text.append_text(line)
+            text.append("\n")
 
+        missing = []
+        caps = self.capabilities
+        if not caps.hdr:
+            missing.append("HDR")
+        if not caps.bit_depths:
+            missing.append("color depth")
+        if not caps.color_profile:
+            missing.append("color profile")
+        if missing:
+            text.append("\n")
+            text.append(
+                f"Not supported by {self.compositor_label}: {', '.join(missing)}.\n",
+                style="dim italic",
+            )
         text.append("\n")
-        text.append("  Colour depth       ", style="dim")
-        text.append("not exposed by wlr-randr\n", style="dim italic")
-        text.append("  Colour mode / HDR  ", style="dim")
-        text.append("not exposed by wlr-randr\n", style="dim italic")
-        text.append("  SDR brightness     ", style="dim")
-        text.append("not exposed by wlr-randr\n", style="dim italic")
-        text.append("  SDR saturation     ", style="dim")
-        text.append("not exposed by wlr-randr\n", style="dim italic")
-        text.append("\n")
-        text.append(
-            "  Changes stay pending until you press a in the main view.\n",
-            style="dim",
-        )
+        text.append("Changes stay pending until you press ", style="dim")
+        text.append("a", style="bold")
+        text.append(" in the main view.", style="dim")
         self.query_one("#advanced-body", DialogStatic).update(text)
 
     def action_focus_next(self) -> None:
-        self.focus_index = (self.focus_index + 1) % len(self.FIELDS)
+        self.focus_index = (self.focus_index + 1) % len(self.fields)
         self._refresh()
 
     def action_focus_previous(self) -> None:
-        self.focus_index = (self.focus_index - 1) % len(self.FIELDS)
+        self.focus_index = (self.focus_index - 1) % len(self.fields)
         self._refresh()
 
+    def _cycle(self, options: list, current: object, delta: int) -> object:
+        index = options.index(current) if current in options else 0
+        return options[(index + delta) % len(options)]
+
     def action_adjust(self, delta: int) -> None:
-        field = self.FIELDS[self.focus_index]
+        field = self.fields[self.focus_index]
+        output = self.output
         if field == "transform":
-            index = (
-                TRANSFORMS.index(self.output.transform)
-                if self.output.transform in TRANSFORMS
-                else 0
+            output.transform = str(
+                self._cycle(list(TRANSFORMS), output.transform, delta)
             )
-            self.output.transform = TRANSFORMS[(index + delta) % len(TRANSFORMS)]
         elif field == "vrr":
-            self.output.adaptive_sync = not self.output.adaptive_sync
+            output.adaptive_sync = not output.adaptive_sync
+        elif field == "enabled":
+            if output.enabled and not self.can_disable:
+                self.notify(
+                    "Cannot disable the last active monitor.",
+                    title="Warning",
+                    severity="warning",
+                )
+                return
+            output.enabled = not output.enabled
+        elif field == "hdr":
+            output.hdr = not output.hdr
+        elif field == "bit_depth":
+            depths: list[int | None] = [None, *self.capabilities.bit_depths]
+            output.bit_depth = self._cycle(depths, output.bit_depth, delta)  # type: ignore[assignment]
         else:
-            self.output.enabled = not self.output.enabled
+            profiles: list[str | None] = [None, *self.capabilities.color_presets]
+            if output.color_profile and output.color_profile not in profiles:
+                profiles.append(output.color_profile)
+            output.color_profile = self._cycle(profiles, output.color_profile, delta)  # type: ignore[assignment]
         self._refresh()
 
     def action_toggle(self) -> None:
-        field = self.FIELDS[self.focus_index]
-        if field == "transform":
-            self.action_adjust(1)
-        elif field == "vrr":
-            self.output.adaptive_sync = not self.output.adaptive_sync
-            self._refresh()
-        else:
-            self.output.enabled = not self.output.enabled
-            self._refresh()
+        field = self.fields[self.focus_index]
+        if (
+            field == "color"
+            and self.capabilities.icc
+            and not self.capabilities.color_presets
+        ):
+            self.action_pick_icc()
+            return
+        self.action_adjust(1)
 
     def action_cycle_transform(self) -> None:
-        self.action_adjust(1)
+        self.output.transform = str(
+            self._cycle(list(TRANSFORMS), self.output.transform, 1)
+        )
+        self._refresh()
 
     def action_toggle_vrr(self) -> None:
         self.output.adaptive_sync = not self.output.adaptive_sync
         self._refresh()
 
+    def action_pick_icc(self) -> None:
+        if not self.capabilities.icc:
+            return
+        current = self.output.color_profile or ""
+        value = current[4:] if current.startswith("icc:") else ""
+
+        def done(path: str | None) -> None:
+            if path is None:
+                return
+            # Compositors open the path verbatim, so store it absolute.
+            path = os.path.expanduser(path)
+            if not os.path.isabs(path):
+                self.notify(
+                    "Use an absolute path (or ~/…) for the ICC profile.",
+                    title="Error",
+                    severity="error",
+                )
+                return
+            candidate = f"icc:{path}"
+            if not self.color_ok(candidate):
+                self.notify(
+                    f"{self.compositor_label} cannot use that ICC path.",
+                    title="Error",
+                    severity="error",
+                )
+                return
+            if not os.path.isfile(path):
+                self.notify(
+                    f"{path} does not exist on this machine.",
+                    title="Warning",
+                    severity="warning",
+                )
+            self.output.color_profile = candidate
+            if "color" in self.fields:
+                self.focus_index = self.fields.index("color")
+            self._refresh()
+
+        self.app.push_screen(
+            TextPrompt(
+                "ICC profile",
+                placeholder="/usr/share/color/icc/display.icc",
+                value=value,
+            ),
+            done,
+        )
+
     def action_apply(self) -> None:
         self.dismiss(True)
 
     def action_cancel(self) -> None:
-        transform, adaptive_sync, enabled = self._snapshot
-        self.output.transform = transform
-        self.output.adaptive_sync = adaptive_sync
-        self.output.enabled = enabled
+        (
+            self.output.transform,
+            self.output.adaptive_sync,
+            self.output.enabled,
+            self.output.hdr,
+            self.output.bit_depth,
+            self.output.color_profile,
+        ) = self._snapshot
         self.dismiss(False)
-
-
-class UnsupportedScreen(ModalScreen[None]):
-    """Explains a hyprmon feature that wlr-randr cannot provide."""
-
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("escape,q,question_mark,enter,space", "close", "Close", show=False)
-    ]
-
-    def __init__(self, title: str, message: str) -> None:
-        super().__init__()
-        self.dialog_title = title
-        self.message = message
-
-    def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog unsupported-dialog"):
-            yield Static(self.dialog_title, classes="dialog-title")
-            yield DialogStatic(self.message, markup=False)
-            yield Static("Esc / Enter to close", classes="dialog-help")
-
-    def on_mount(self) -> None:
-        self.query_one(DialogStatic).focus()
-
-    def action_close(self) -> None:
-        self.dismiss()
 
 
 class ProfileScreen(ModalScreen[str | None]):
@@ -377,10 +470,13 @@ class ProfileScreen(ModalScreen[str | None]):
         self.allow_save = allow_save
         self._profiles = {}
         self._confirm_delete: str | None = None
+        # The last failed action, shown above the file's own problems until
+        # the next action succeeds (reloading the list must not hide it).
+        self._action_error: str | None = None
+        self._problems: list[str] = []
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="dialog"):
-            yield Static("Profiles", classes="dialog-title")
+        with _dialog("Profiles", "profile-dialog"):
             yield Static("", id="profile-error", classes="dialog-error")
             yield OptionList(id="profile-list")
             yield Static("", id="profile-help", classes="dialog-help")
@@ -390,7 +486,6 @@ class ProfileScreen(ModalScreen[str | None]):
         self.query_one(OptionList).focus()
 
     def _reload(self) -> None:
-        error = self.query_one("#profile-error", Static)
         help_text = self.query_one("#profile-help", Static)
         option_list = self.query_one(OptionList)
         option_list.clear_options()
@@ -401,10 +496,11 @@ class ProfileScreen(ModalScreen[str | None]):
             self._profiles = self.store.load()
             active_name = self.store.find_active(self.current_states)
             names = self.store.names()
+            # Broken profiles are skipped, but say why they are missing.
+            self._problems = self.store.problems()
         except ProfileError as exc:
-            error.update(str(exc))
-        else:
-            error.update("")
+            self._problems = [str(exc)]
+        self._show_messages()
 
         for name in names:
             profile = self._profiles.get(name)
@@ -423,17 +519,18 @@ class ProfileScreen(ModalScreen[str | None]):
 
         if self._confirm_delete:
             help_text.update(
-                f"Delete profile {self._confirm_delete!r}?  y confirm  ·  n cancel"
+                f"Delete profile [b]{self._confirm_delete}[/b]?  "
+                "[b]y[/b] Yes | [b]n[/b] No"
             )
         elif self.standalone:
             help_text.update(
-                "Enter apply & exit  ·  r rename  ·  d delete  ·  "
-                "Shift+↑/↓ reorder  ·  l open editor  ·  Esc quit"
+                "[b]↵[/b] Apply & exit | [b]r[/b] Rename | [b]d[/b] Delete | "
+                "[b]⇧↑↓[/b] Reorder | [b]l[/b] Editor | [b]Esc[/b] Quit"
             )
         else:
             help_text.update(
-                "Enter apply  ·  s save  ·  r rename  ·  d delete  ·  "
-                "Shift+↑/↓ reorder  ·  Esc cancel"
+                "[b]↵[/b] Apply | [b]s[/b] Save | [b]r[/b] Rename | [b]d[/b] Delete | "
+                "[b]⇧↑↓[/b] Reorder | [b]Esc[/b] Close"
             )
 
         highlight = 0
@@ -466,6 +563,24 @@ class ProfileScreen(ModalScreen[str | None]):
             return None
         return name
 
+    def _show_messages(self) -> None:
+        messages = [self._action_error] if self._action_error else []
+        messages.extend(self._problems)
+        error = self.query_one("#profile-error", Static)
+        error.update("\n".join(messages))
+        error.display = bool(messages)
+
+    def _store_call(self, call: Callable[[], object]) -> object | None:
+        """Run a store change; on failure keep the error visible."""
+        try:
+            result = call()
+        except ProfileError as exc:
+            self._action_error = str(exc)
+            self._show_messages()
+            return None
+        self._action_error = None
+        return result
+
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._confirm_delete is None:
             return
@@ -473,13 +588,12 @@ class ProfileScreen(ModalScreen[str | None]):
         if key in ("y", "Y"):
             name = self._confirm_delete
             self._confirm_delete = None
-            try:
-                deleted = self.store.delete(name)
-            except ProfileError as exc:
-                self.query_one("#profile-error", Static).update(str(exc))
-            else:
-                if deleted:
-                    self.notify(f"Deleted profile {name!r}.", severity="information")
+            if self._store_call(lambda: self.store.delete(name)):
+                self.notify(
+                    f"Deleted profile {name!r}.",
+                    title="Info",
+                    severity="information",
+                )
             self._reload()
             self.query_one(OptionList).focus()
         elif key in ("n", "N", "escape"):
@@ -512,12 +626,7 @@ class ProfileScreen(ModalScreen[str | None]):
         def done(value: str | None) -> None:
             if value is None or value == name:
                 return
-            try:
-                renamed = self.store.rename(name, value)
-            except ProfileError as exc:
-                self.query_one("#profile-error", Static).update(str(exc))
-                return
-            if renamed:
+            if self._store_call(lambda: self.store.rename(name, value)):
                 self.initial_highlight = value
                 self._reload()
             self.query_one(OptionList).focus()
@@ -527,23 +636,20 @@ class ProfileScreen(ModalScreen[str | None]):
             done,
         )
 
-    def action_move_up(self) -> None:
+    def _move(self, offset: int) -> None:
         name = self._selected_name()
         if name is None:
             return
-        if self.store.move(name, -1):
+        if self._store_call(lambda: self.store.move(name, offset)):
             self.initial_highlight = name
             self._reload()
             self.query_one(OptionList).focus()
 
+    def action_move_up(self) -> None:
+        self._move(-1)
+
     def action_move_down(self) -> None:
-        name = self._selected_name()
-        if name is None:
-            return
-        if self.store.move(name, 1):
-            self.initial_highlight = name
-            self._reload()
-            self.query_one(OptionList).focus()
+        self._move(1)
 
     def action_cursor_up(self) -> None:
         option_list = self.query_one(OptionList)
@@ -579,12 +685,19 @@ class HelpScreen(ModalScreen[None]):
         Binding("end", "scroll_end", show=False),
     ]
 
+    def __init__(self, extra: str = "") -> None:
+        super().__init__()
+        self.extra = extra
+
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="dialog help-dialog"):
-            yield Static("wlr-randr-tui keys", classes="dialog-title")
+        scroll = VerticalScroll(classes="dialog help-dialog")
+        scroll.border_title = "Keys"
+        with scroll:
             yield Static(HELP_TEXT, markup=True)
+            if self.extra:
+                yield Static(self.extra, markup=False, classes="help-extra")
             yield Static(
-                "↑↓/jk scroll  ·  PgUp/PgDn page  ·  Home/End  ·  Esc close",
+                "[b]↑↓[/b] Scroll | [b]PgUp/PgDn[/b] Page | [b]Esc[/b] Close",
                 classes="dialog-help",
             )
 

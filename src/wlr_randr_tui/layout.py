@@ -183,7 +183,7 @@ def snap_position(
 ) -> tuple[int, int, list[Guide]]:
     """Snap a proposed position and return the guides that should be shown.
 
-    The algorithm follows hyprmon: edges first, then centres, then the origin.
+    The algorithm follows hyprmon: edges first, then centers, then the origin.
     """
     if mode == SnapMode.OFF or threshold <= 0:
         return x, y, []

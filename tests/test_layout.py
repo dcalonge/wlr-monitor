@@ -106,7 +106,7 @@ def test_snap_centers_only() -> None:
     first.y = 0
     second.mode = Mode(width=1000, height=1000, refresh=60.0)
     second.scale = 1.0
-    # Their centres are 2px apart, but no edges are within the threshold.
+    # Their centers are 2px apart, but no edges are within the threshold.
     x, y, guides = snap_position(
         second,
         [first, second],
@@ -120,7 +120,7 @@ def test_snap_centers_only() -> None:
     assert Guide("vertical", 960) in guides
 
 
-def test_snap_both_combines_edge_and_centre_guides() -> None:
+def test_snap_both_combines_edge_and_center_guides() -> None:
     first, second = load_outputs()
     first.x = 0
     first.y = 0

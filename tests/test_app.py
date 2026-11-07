@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
-from textual.widgets import Input, OptionList
+from textual.widgets import Input, OptionList, Static
 
 from wlr_randr_tui.app import GRID_SIZES, STARTUP_PROFILE, WlrRandrApp
+from wlr_randr_tui.compositor import Backend, Mango, Niri, Sway
 from wlr_randr_tui.layout import SnapMode
 from wlr_randr_tui.model import Output, OutputState
-from wlr_randr_tui.profiles import ProfileStore
+from wlr_randr_tui.profiles import ProfileError, ProfileStore
 from wlr_randr_tui.screens import (
     AdvancedSettingsScreen,
     ChoiceScreen,
@@ -17,14 +20,17 @@ from wlr_randr_tui.screens import (
     HelpScreen,
     ProfileScreen,
     TextPrompt,
-    UnsupportedScreen,
 )
 from wlr_randr_tui.widgets import (
+    DetailsPanel,
     DragFinished,
+    HelpItem,
     LayoutMap,
+    OutputList,
     OutputMoved,
     OutputScaleStep,
     OutputToggled,
+    layout_help,
 )
 from wlr_randr_tui.wlr import ApplyResult
 
@@ -233,7 +239,62 @@ def test_help_blocks_shortcuts(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_mirror_shows_unsupported_dialog(tmp_path: Path) -> None:
+def sway_backend(tmp_path: Path) -> Backend:
+    env = {"HOME": str(tmp_path / "home"), "PATH": str(tmp_path / "bin")}
+    return Backend(FakeBackend(load_outputs()), Sway(env=env))  # type: ignore[arg-type]
+
+
+def test_advanced_dialog_offers_compositor_color_settings(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        backend=sway_backend(tmp_path),
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=load_outputs(),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            app.action_advanced()
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, AdvancedSettingsScreen)
+            assert screen.fields == (
+                "transform",
+                "vrr",
+                "enabled",
+                "hdr",
+                "bit_depth",
+                "color",
+            )
+            await pilot.press("down", "down", "down", "space")
+            assert app.outputs[0].hdr is True
+            await pilot.press("down", "right", "right", "right")
+            assert app.outputs[0].bit_depth == 10
+            await pilot.press("down", "right")
+            assert app.outputs[0].color_profile == "gamma22"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "HDMI-A-1" in app.dirty_names
+            details = app.query_one(DetailsPanel).render()
+            assert "HDR" in str(details)
+
+            # Reset must drop the new settings again, not keep them.
+            app.action_reset()
+            assert app.outputs[0].hdr is None
+            assert app.outputs[0].bit_depth is None
+            assert app.outputs[0].color_profile is None
+            assert app.dirty_names == set()
+
+            app.action_advanced()
+            await pilot.pause()
+            await pilot.press("down", "down", "down", "space", "escape")
+            await pilot.pause()
+            assert app.outputs[0].hdr is None
+
+    asyncio.run(run())
+
+
+def test_generic_backend_marks_color_settings_unsupported(tmp_path: Path) -> None:
     app = WlrRandrApp(
         store=ProfileStore(tmp_path / "profiles.json"),
         initial_outputs=load_outputs(),
@@ -242,12 +303,103 @@ def test_mirror_shows_unsupported_dialog(tmp_path: Path) -> None:
     async def run() -> None:
         async with app.run_test(size=(110, 34)) as pilot:
             await pilot.pause()
-            app.action_mirror()
+            app.action_advanced()
             await pilot.pause()
-            assert isinstance(app.screen, UnsupportedScreen)
-            await pilot.press("escape")
+            screen = app.screen
+            assert isinstance(screen, AdvancedSettingsScreen)
+            assert screen.fields == ("transform", "vrr", "enabled")
+            body = str(screen.query_one("#advanced-body").render())
+            assert "Not supported by wlroots" in body
+
+    asyncio.run(run())
+
+
+def test_apply_warnings_are_notified(tmp_path: Path) -> None:
+    class WarningBackend(FakeBackend):
+        def apply_states(self, states, *, profile=None):  # type: ignore[no-untyped-def]
+            results = super().apply_states(states)
+            self.profile = profile
+            return [*results, ApplyResult("config", [], True, warning="heads up")]
+
+    backend = WarningBackend(load_outputs())
+    path = tmp_path / "profiles.json"
+    store = ProfileStore(path)
+    store.save("desk", [output.state() for output in load_outputs()])
+    app = WlrRandrApp(backend=backend, store=store)
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34), notifications=True) as pilot:
             await pilot.pause()
-            assert not isinstance(app.screen, UnsupportedScreen)
+            app.outputs[0].x = 64
+            app.action_apply()
+            await pilot.pause()
+            messages = [notification.message for notification in app._notifications]
+            assert "heads up" in messages
+            assert app._apply_profile("desk")
+            assert backend.profile == "desk"
+
+    asyncio.run(run())
+
+
+def test_small_terminals_hide_secondary_sections(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=load_outputs(),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(40, 14)) as pilot:
+            await pilot.pause()
+            assert app.screen.has_class("-compact")
+            assert app.screen.has_class("-tiny")
+            assert app.query_one(DetailsPanel).display is False
+            assert app.query_one(OutputList).display is False
+            assert "HDMI-A-1" in app.query_one(LayoutMap).render().plain
+            await pilot.resize_terminal(120, 40)
+            await pilot.pause()
+            assert not app.screen.has_class("-compact")
+            assert app.query_one(DetailsPanel).display is True
+            assert app.query_one(OutputList).display is True
+
+    asyncio.run(run())
+
+
+def test_help_bar_wraps_and_drops_low_priority_items() -> None:
+    items = [
+        HelpItem("a", "Apply", 0),
+        HelpItem("z", "Reset", 6),
+        HelpItem("q", "Quit", 1),
+    ]
+    assert [[item.key for item in line] for line in layout_help(items, 80)] == [
+        ["a", "z", "q"]
+    ]
+    assert [[item.key for item in line] for line in layout_help(items, 10)] == [
+        ["a"],
+        ["q"],
+    ]
+
+
+def test_theme_uses_terminal_ansi_colors(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=load_outputs(),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            assert app.theme == "terminal"
+            assert app.native_ansi_color is True
+            colors = set()
+            for strip in app.screen._compositor.render_strips():
+                for segment in strip:
+                    style = segment.style
+                    if style is None:
+                        continue
+                    for color in (style.color, style.bgcolor):
+                        if color is not None:
+                            colors.add(color.type.name)
+            assert colors <= {"DEFAULT", "STANDARD"}
 
     asyncio.run(run())
 
@@ -379,7 +531,9 @@ class FakeBackend:
     def read_outputs(self) -> list[Output]:
         return self.outputs
 
-    def apply_states(self, states: list[OutputState]) -> list[ApplyResult]:
+    def apply_states(
+        self, states: list[OutputState], *, profile: str | None = None
+    ) -> list[ApplyResult]:
         results: list[ApplyResult] = []
         for state in states:
             output = next(item for item in self.outputs if item.name == state.name)
@@ -549,5 +703,217 @@ def test_profile_browser_reorders_profiles(tmp_path: Path) -> None:
             screen.action_move_up()
             await pilot.pause()
             assert ProfileStore(path).names() == ["work", "home"]
+
+    asyncio.run(run())
+
+
+def test_startup_creates_missing_include_and_shows_hint(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "PATH": str(tmp_path / "bin")}
+    backend = Backend(FakeBackend(load_outputs()), Niri(env=env))  # type: ignore[arg-type]
+    app = WlrRandrApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34), notifications=True) as pilot:
+            await pilot.pause()
+            include = home / ".config" / "niri" / "wlr-randr-tui.kdl"
+            # niri rejects a missing include, so the file must exist first.
+            assert include.exists()
+            assert 'output "Microstep MSI MP275 PC3M394200857" {' in include.read_text()
+            messages = [item.message for item in app._notifications]
+            assert any("wlr-randr-tui.kdl" in message for message in messages)
+
+    asyncio.run(run())
+
+
+def test_startup_never_writes_the_mango_include(tmp_path: Path) -> None:
+    # mango ignores a missing source_optional file, and writing one could
+    # trigger a full config reload just by opening the TUI.
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "PATH": str(tmp_path / "bin")}
+    backend = Backend(FakeBackend(load_outputs()), Mango(env=env))  # type: ignore[arg-type]
+    app = WlrRandrApp(backend=backend, store=ProfileStore(tmp_path / "p.json"))
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            assert not (home / ".config" / "mango" / "wlr-randr-tui.conf").exists()
+
+    asyncio.run(run())
+
+
+def test_profiles_from_other_compositors_show_no_phantom_changes(
+    tmp_path: Path,
+) -> None:
+    store = ProfileStore(tmp_path / "profiles.json")
+    states = [output.state() for output in load_outputs()]
+    states[0].hdr = True
+    states[0].bit_depth = 10
+    store.save("sway-hdr", states)
+    backend = FakeBackend(load_outputs())
+    app = WlrRandrApp(backend=backend, store=store)
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            # The generic wlroots backend cannot do HDR or bit depth.
+            assert app._apply_profile("sway-hdr")
+            assert app.outputs[0].hdr is None
+            assert app.outputs[0].bit_depth is None
+            assert app.dirty_names == set()
+
+    asyncio.run(run())
+
+
+def test_rotation_is_named_consistently(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=load_outputs(),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert "Rotation" in app.query_one(OutputList).render().plain
+            app.action_pick_transform()
+            await pilot.pause()
+            assert isinstance(app.screen, ChoiceScreen)
+            assert app.screen.dialog_title == "Rotation"
+            await pilot.press("down", "enter")
+            await pilot.pause()
+            assert app.status == "HDMI-A-1: rotation 90"
+            details = str(app.query_one(DetailsPanel).render())
+            assert "Rotation" in details and "rotation normal → 90" in details
+
+    asyncio.run(run())
+
+
+def test_advanced_dialog_cannot_disable_the_last_monitor(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=[load_outputs()[0]],
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            app.action_advanced()
+            await pilot.pause()
+            await pilot.press("down", "down", "space", "enter")
+            await pilot.pause()
+            assert app.outputs[0].enabled is True
+            assert app.dirty_names == set()
+
+    asyncio.run(run())
+
+
+def test_apply_refuses_to_turn_off_every_monitor(tmp_path: Path) -> None:
+    backend = FakeBackend(load_outputs())
+    store = ProfileStore(tmp_path / "profiles.json")
+    dark = [output.state() for output in load_outputs()]
+    for state in dark:
+        state.enabled = False
+    store.save("dark", dark)
+    app = WlrRandrApp(backend=backend, store=store)
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            assert not app._apply_profile("dark")
+            assert backend.applied == []
+            assert "every monitor" in app.status
+
+    asyncio.run(run())
+
+
+def test_profile_browser_survives_write_errors(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.json"
+    store = ProfileStore(path)
+    store.save("work", [output.state() for output in load_outputs()])
+    store.save("home", [output.state() for output in load_outputs()])
+    app = WlrRandrApp(store=store, initial_outputs=load_outputs())
+    failure = ProfileError("Could not write profiles.json: disk full")
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            app.action_open_profiles()
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ProfileScreen)
+            error = screen.query_one("#profile-error", Static)
+            screen.query_one(OptionList).highlighted = 0  # "work", can move down
+            with patch.object(ProfileStore, "_write", side_effect=failure):
+                screen.action_move_down()
+                await pilot.pause()
+                assert app.is_running
+                assert "disk full" in str(error.render()) and error.display
+
+            # The delete error must survive the list reload.
+            readonly = ProfileError("Could not write profiles.json: read-only")
+            with patch.object(ProfileStore, "_write", side_effect=readonly):
+                screen.query_one(OptionList).highlighted = 0
+                screen.action_delete()
+                await pilot.press("y")
+                await pilot.pause()
+                assert "read-only" in str(error.render()) and error.display
+            assert ProfileStore(path).names() == ["work", "home"]
+
+            # The next successful action clears it.
+            screen.query_one(OptionList).highlighted = 0
+            screen.action_move_down()
+            await pilot.pause()
+            assert not error.display
+            assert ProfileStore(path).names() == ["home", "work"]
+
+    asyncio.run(run())
+
+
+def test_startup_profile_overwrite_asks_even_if_broken(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.json"
+    store = ProfileStore(path)
+    store.save(STARTUP_PROFILE, [output.state() for output in load_outputs()])
+    raw = json.loads(path.read_text())
+    raw["profiles"][STARTUP_PROFILE]["outputs"]["HDMI-A-1"]["transform"] = "bogus"
+    path.write_text(json.dumps(raw))
+    app = WlrRandrApp(store=store, initial_outputs=load_outputs())
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            app.action_save_startup()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+
+    asyncio.run(run())
+
+
+def test_icc_prompt_expands_home_and_rejects_relative_paths(tmp_path: Path) -> None:
+    app = WlrRandrApp(
+        backend=sway_backend(tmp_path),
+        store=ProfileStore(tmp_path / "profiles.json"),
+        initial_outputs=load_outputs(),
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause()
+            app.action_advanced()
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            prompt = app.screen.query_one(Input)
+            prompt.value = "relative.icc"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.outputs[0].color_profile is None
+
+            await pilot.press("i")
+            await pilot.pause()
+            app.screen.query_one(Input).value = "~/display.icc"
+            await pilot.press("enter")
+            await pilot.pause()
+            home = os.path.expanduser("~")
+            assert app.outputs[0].color_profile == f"icc:{home}/display.icc"
 
     asyncio.run(run())

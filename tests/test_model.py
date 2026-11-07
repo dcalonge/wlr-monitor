@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from wlr_randr_tui.model import (
     COMMON_SCALES,
     SCALE_MAX,
@@ -12,7 +14,9 @@ from wlr_randr_tui.model import (
     OutputState,
     clamp_scale,
     common_scales,
+    disables_everything,
     format_refresh,
+    match_state,
     refresh_arg,
     step_scale,
 )
@@ -138,3 +142,102 @@ def test_clamp_and_step_scale() -> None:
     assert step_scale(1.0, 1) == 1.05
     assert step_scale(2.98, 1) == SCALE_MAX
     assert step_scale(0.52, -1) == SCALE_MIN
+
+
+def test_compositor_settings_are_optional_in_state_dicts() -> None:
+    output = load_outputs()[0]
+    raw = output.state().to_dict()
+    assert "hdr" not in raw and "bit_depth" not in raw and "color_profile" not in raw
+
+    output.hdr = False
+    output.bit_depth = 10
+    output.color_profile = "icc:/x.icc"
+    raw = output.state().to_dict()
+    assert raw["hdr"] is False
+    assert raw["bit_depth"] == 10
+    restored = OutputState.from_dict(output.name, raw)
+    assert restored.extras() == {
+        "hdr": False,
+        "bit_depth": 10,
+        "color_profile": "icc:/x.icc",
+    }
+
+
+def test_apply_to_keeps_unmanaged_settings_unless_restoring() -> None:
+    output = load_outputs()[0]
+    output.hdr = True
+    old_profile_state = OutputState.from_dict(output.name, {"scale": 2.0})
+    old_profile_state.apply_to(output)
+    assert output.scale == 2.0
+    assert output.hdr is True
+    old_profile_state.apply_to(output, restore=True)
+    assert output.hdr is None
+
+
+def test_identifier_needs_all_edid_fields() -> None:
+    hdmi, edp = load_outputs()
+    assert hdmi.identifier == "Microstep MSI MP275 PC3M394200857"
+    assert edp.identifier == ""
+
+
+def test_state_values_are_validated_strictly() -> None:
+    base = load_outputs()[0].state().to_dict()
+    bad_values = [
+        {"scale": float("nan")},
+        {"scale": float("inf")},
+        {"scale": 0},
+        {"position": {"x": float("inf"), "y": 0}},
+        {"position": {"x": 1.5, "y": 0}},
+        {"position": "0,0"},
+        {"hdr": "false"},
+        {"enabled": "yes"},
+        {"adaptive_sync": "off"},
+        {"bit_depth": True},
+        {"color_profile": 8},
+        {"mode": {"width": 1920, "height": 1080, "refresh": float("nan")}},
+        {"mode": {"width": 0, "height": 1080, "refresh": 60}},
+    ]
+    for override in bad_values:
+        with pytest.raises((TypeError, ValueError)):
+            OutputState.from_dict("HDMI-A-1", {**base, **override})
+
+    # JSON integers 0/1 are fine for flags, and virtual outputs may have a
+    # refresh rate of 0.
+    state = OutputState.from_dict(
+        "HEADLESS-1",
+        {
+            **base,
+            "hdr": 1,
+            "enabled": 1,
+            "mode": {"width": 1920, "height": 1080, "refresh": 0},
+        },
+    )
+    assert state.hdr is True and state.enabled is True
+
+
+def test_match_state_never_guesses_between_twins() -> None:
+    first, second = load_outputs()
+    shared = first.hardware_id
+    saved = {"DP-1": first.state(), "DP-2": second.state()}
+    saved["DP-1"].name, saved["DP-2"].name = "DP-1", "DP-2"
+    saved["DP-2"].hardware_id = shared  # identical monitors
+
+    # Unique on both sides: the renamed connector is found by EDID.
+    assert match_state({"DP-1": saved["DP-1"]}, "DP-9", shared, [shared]) is not None
+    # Two saved twins: no guess.
+    assert match_state(saved, "DP-9", shared, [shared]) is None
+    # Two connected twins: no guess either.
+    assert (
+        match_state({"DP-1": saved["DP-1"]}, "DP-9", shared, [shared, shared]) is None
+    )
+    # The connector name always wins.
+    assert match_state(saved, "DP-2", shared, [shared, shared]) is saved["DP-2"]
+
+
+def test_disables_everything() -> None:
+    state = load_outputs()[0].state()
+    state.enabled = False
+    assert disables_everything({"HDMI-A-1": True}, [state])
+    assert not disables_everything({"HDMI-A-1": True, "eDP-1": True}, [state])
+    other = load_outputs()[1].state()
+    assert not disables_everything({"HDMI-A-1": True, "eDP-1": False}, [state, other])

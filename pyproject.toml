@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Desktop Environment",
   "Topic :: System :: Hardware",
 ]
-dependencies = ["textual>=0.80"]
+dependencies = ["textual>=8.2.5"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]

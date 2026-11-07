@@ -1,6 +1,16 @@
-"""Textual widgets for the monitor list, layout map and details panel."""
+"""Textual widgets: the outputs table, layout map, details block and help bar.
+
+The look follows impala / bluetui: stacked bordered sections titled
+``Outputs``/``Layout``/…, the active section drawn with a heavy green border,
+table headers with a blank line below them, a dark-gray highlight for the
+selected row and a centered blue help line with bold keys. Only ANSI colors
+are used, so everything follows the terminal palette (foot, kitty, …).
+"""
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from rich.text import Text
 from textual import events
@@ -8,8 +18,11 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
+from .compositor import Capabilities, color_profile_label
 from .layout import Guide, LayoutGeometry, Rect, compute_layout
 from .model import Output, OutputState, format_refresh
+
+HIGHLIGHT = "bold white on bright_black"
 
 
 class OutputSelected(Message):
@@ -55,8 +68,66 @@ class OutputScaleStep(Message):
         self.steps = steps
 
 
+# ----------------------------------------------------------------------
+# Outputs table
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Column:
+    header: str
+    width: int
+    priority: int  # lower survives longer when the terminal is narrow
+    value: Callable[[Output], str]
+
+
+def _mode_text(output: Output) -> str:
+    if output.mode is None:
+        return "-"
+    return f"{output.mode.size_text}@{format_refresh(output.mode.refresh)}"
+
+
+COLUMNS = (
+    Column("Name", 12, 0, lambda output: output.name),
+    Column("Mode", 15, 1, _mode_text),
+    Column("State", 5, 2, lambda output: "On" if output.enabled else "Off"),
+    Column("Scale", 5, 3, lambda output: f"{output.scale:g}"),
+    Column("Position", 11, 4, lambda output: f"{output.x},{output.y}"),
+    Column("Rotation", 11, 6, lambda output: output.transform),
+    Column("VRR", 3, 5, lambda output: "On" if output.adaptive_sync else "Off"),
+)
+MARKER_WIDTH = 2
+
+
+def visible_columns(width: int) -> list[Column]:
+    """Drop the least important columns until the table fits ``width``."""
+    columns = list(COLUMNS)
+    while len(columns) > 1:
+        needed = (
+            MARKER_WIDTH + sum(column.width for column in columns) + len(columns) - 1
+        )
+        if needed <= width:
+            break
+        columns.remove(max(columns, key=lambda column: column.priority))
+    return columns
+
+
+def column_spacing(width: int, columns: list[Column]) -> tuple[int, int]:
+    """(leading space, gap) that spreads columns like ratatui's SpaceAround."""
+    free = max(0, width - MARKER_WIDTH - sum(column.width for column in columns))
+    gap = max(1, free // (len(columns) + 1))
+    lead = max(0, (free - gap * (len(columns) - 1)) // 2)
+    return lead, gap
+
+
+def _cell(value: str, width: int) -> str:
+    if len(value) > width:
+        value = value[: max(0, width - 1)] + "…"
+    return value.center(width)
+
+
 class OutputList(Widget):
-    """Compact list of outputs. Selection is controlled by the app."""
+    """impala-style table of outputs. Selection is controlled by the app."""
 
     can_focus = False
 
@@ -73,37 +144,53 @@ class OutputList(Widget):
         self.outputs = outputs
         self.selected = selected
         self.dirty = dirty
-        self.refresh()
+        self.refresh(layout=True)
+
+    def get_content_height(self, container, viewport, width: int) -> int:  # type: ignore[no-untyped-def]
+        # Header, blank line, then one row per output.
+        return 2 + max(1, len(self.outputs))
 
     def render(self) -> Text:
-        text = Text()
+        width = max(1, self.content_size.width)
+        text = Text(no_wrap=True, overflow="crop")
         if not self.outputs:
-            text.append("No outputs found", style="dim")
+            text.append("No outputs found".center(width), style="dim")
             return text
+
+        columns = visible_columns(width)
+        lead, gap = column_spacing(width, columns)
+
+        text.append(" " * (MARKER_WIDTH + lead))
+        for position, column in enumerate(columns):
+            if position:
+                text.append(" " * gap)
+            text.append(_cell(column.header, column.width), style="bold")
+        text.append("\n\n")
 
         for index, output in enumerate(self.outputs):
             selected = index == self.selected
-            name_style = "bold reverse" if selected else "bold"
             if output.name in self.dirty:
-                marker = "●"
-                marker_style = "yellow"
+                marker, marker_style = "●", "yellow"
             elif selected:
-                marker = "▸"
-                marker_style = "bold reverse"
+                marker, marker_style = "▸", "bold"
             else:
-                marker = " "
-                marker_style = ""
-
-            text.append(f"{marker} ", style=marker_style)
-            text.append(f"{output.name:<12}", style=name_style)
-            if output.mode is not None:
-                mode = f"{output.mode.size_text}@{format_refresh(output.mode.refresh)}"
-            else:
-                mode = "no mode"
-            text.append(f" {mode:<14}", style="dim")
-            text.append(f" {output.scale:g}x", style="dim")
-            if not output.enabled:
-                text.append(" off", style="dim red")
+                marker, marker_style = " ", ""
+            row = Text(no_wrap=True, overflow="crop")
+            row.append(f"{marker} ", style=marker_style)
+            row.append(" " * lead)
+            for position, column in enumerate(columns):
+                if position:
+                    row.append(" " * gap)
+                style = "dim" if not output.enabled else ""
+                if column.header == "State" and not output.enabled:
+                    style = "red"
+                if column.header == "Name" and output.name in self.dirty:
+                    style = "yellow"
+                row.append(_cell(column.value(output), column.width), style=style)
+            row.pad_right(max(0, width - row.cell_len))
+            if selected:
+                row.stylize(HIGHLIGHT)
+            text.append_text(row)
             if index != len(self.outputs) - 1:
                 text.append("\n")
         return text
@@ -111,10 +198,15 @@ class OutputList(Widget):
     def on_click(self, event: events.Click) -> None:
         if not self.outputs:
             return
-        index = event.y - self.content_offset.y
+        index = event.y - self.content_offset.y - 2
         if 0 <= index < len(self.outputs):
             self.post_message(OutputSelected(self.outputs[index].name))
             event.stop()
+
+
+# ----------------------------------------------------------------------
+# Layout map
+# ----------------------------------------------------------------------
 
 
 class LayoutMap(Widget):
@@ -172,8 +264,8 @@ class LayoutMap(Widget):
         height = self.content_size.height
         if width <= 0 or height <= 0:
             return Text("")
-        if width < 12 or height < 4:
-            return Text("Terminal too small for the layout map", style="dim")
+        if width < 12 or height < 3:
+            return Text("Too small for the layout map", style="dim")
 
         geometry = compute_layout(self.outputs, width, height)
         self._geometry = geometry
@@ -201,44 +293,31 @@ class LayoutMap(Widget):
             rect = geometry.boxes[output.name]
             selected = output.name == self.selected_name
             dirty = output.name in self.dirty
-            if selected:
-                border_style = "bold yellow"
-                label_style = "bold yellow"
-                detail_style = "yellow"
-                fill_style = None
-            elif not output.enabled:
-                border_style = "dim"
-                label_style = "dim"
-                detail_style = "dim"
-                fill_style = "dim"
+            if not output.enabled and not selected:
+                border_style = label_style = detail_style = "dim"
             elif dirty:
-                border_style = "bold yellow"
+                border_style = "bold yellow" if selected else "yellow"
                 label_style = "bold yellow"
                 detail_style = "yellow"
-                fill_style = None
+            elif selected:
+                border_style = "bold green"
+                label_style = "bold"
+                detail_style = ""
             else:
-                border_style = "green"
-                label_style = "bold green"
+                border_style = ""
+                label_style = "bold"
                 detail_style = "dim"
-                fill_style = None
 
             self._draw_box(
                 chars,
                 styles,
                 rect,
                 border_style,
-                fill_style,
-                double=selected,
+                "dim" if not output.enabled else None,
+                heavy=selected,
                 dotted=not output.enabled,
             )
-            self._draw_label(
-                chars,
-                styles,
-                rect,
-                output,
-                label_style,
-                detail_style,
-            )
+            self._draw_label(chars, styles, rect, output, label_style, detail_style)
 
         text = Text()
         for y in range(height):
@@ -267,14 +346,14 @@ class LayoutMap(Widget):
                 column, _ = geometry.world_to_cell(guide.value, geometry.min_y)
                 if 0 <= column < width:
                     for row in range(height):
-                        chars[row][column] = "│"
-                        styles[row][column] = "dim"
+                        chars[row][column] = "┊"
+                        styles[row][column] = "blue"
             else:
                 _, row = geometry.world_to_cell(geometry.min_x, guide.value)
                 if 0 <= row < height:
                     for column in range(width):
-                        chars[row][column] = "─"
-                        styles[row][column] = "dim"
+                        chars[row][column] = "┈"
+                        styles[row][column] = "blue"
 
     def _draw_box(
         self,
@@ -284,7 +363,7 @@ class LayoutMap(Widget):
         border_style: str,
         fill_style: str | None,
         *,
-        double: bool = False,
+        heavy: bool = False,
         dotted: bool = False,
     ) -> None:
         if rect.width < 2 or rect.height < 2:
@@ -297,14 +376,15 @@ class LayoutMap(Widget):
             for x in range(rect.x + 1, rect.right - 1):
                 self._put(chars, styles, x, y, fill, fill_style)
 
-        if double:
-            horizontal, vertical = "═", "║"
-            top_left, top_right = "╔", "╗"
-            bottom_left, bottom_right = "╚", "╝"
+        # The same plain/thick pair ratatui uses for unfocused/focused blocks.
+        if heavy:
+            horizontal, vertical = "━", "┃"
+            top_left, top_right = "┏", "┓"
+            bottom_left, bottom_right = "┗", "┛"
         else:
             horizontal, vertical = "─", "│"
-            top_left, top_right = "╭", "╮"
-            bottom_left, bottom_right = "╰", "╯"
+            top_left, top_right = "┌", "┐"
+            bottom_left, bottom_right = "└", "┘"
 
         for x in range(rect.x + 1, rect.right - 1):
             self._put(chars, styles, x, rect.y, horizontal, border_style)
@@ -336,6 +416,8 @@ class LayoutMap(Widget):
         state = "[ON]" if output.enabled else "[OFF]"
         name = f"{output.name} {state}"
         if len(name) > interior_width:
+            name = output.name
+        if len(name) > interior_width:
             name = name[: max(0, interior_width - 1)] + "…"
         name_x = rect.x + 1 + max(0, (interior_width - len(name)) // 2)
         self._put(chars, styles, name_x, rect.y + 1, name, label_style)
@@ -354,6 +436,8 @@ class LayoutMap(Widget):
         badges: list[str] = []
         if output.adaptive_sync:
             badges.append("VRR")
+        if output.hdr:
+            badges.append("HDR")
         if output.transform != "normal":
             badges.append(
                 f"{output.transform}°"
@@ -445,12 +529,60 @@ class LayoutMap(Widget):
         event.stop()
 
 
+# ----------------------------------------------------------------------
+# Details block
+# ----------------------------------------------------------------------
+
+DETAIL_CELL = 32
+DETAIL_LABEL = 15
+
+
+def _bool_label(value: bool | None) -> str:
+    return "On" if value else "Off"
+
+
+def _optional_label(value: bool | None) -> str:
+    """Like _bool_label, but ``None`` (unknown / compositor default) stays visible."""
+    if value is None:
+        return "default"
+    return _bool_label(value)
+
+
+def _depth_label(value: int | None) -> str:
+    return f"{value} bit" if value else "default"
+
+
+def detail_rows(
+    output: Output, capabilities: Capabilities | None = None
+) -> list[tuple[str, str]]:
+    caps = capabilities or Capabilities()
+    mode = output.current_mode
+    rows = [
+        ("State", "On" if output.enabled else "Off"),
+        ("Mode", mode.label if mode is not None else "none"),
+        ("Position", f"{output.x},{output.y}"),
+        ("Logical", f"{output.logical_width}x{output.logical_height}"),
+        ("Scale", f"{output.scale:g}"),
+        ("Rotation", output.transform),
+        ("VRR", _bool_label(output.adaptive_sync)),
+    ]
+    if caps.hdr:
+        rows.append(("HDR", _optional_label(output.hdr)))
+    if caps.bit_depths:
+        rows.append(("Color depth", _depth_label(output.bit_depth)))
+    if caps.color_profile:
+        rows.append(("Color profile", color_profile_label(output.color_profile)))
+    rows.append(("Physical", f"{output.physical_width}x{output.physical_height} mm"))
+    return rows
+
+
 class DetailsPanel(Static):
     """Shows the selected output's current and pending settings."""
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "Selected output"
+        self.border_title = "Output"
+        self._last: tuple[object, ...] | None = None
 
     def show_output(
         self,
@@ -459,79 +591,68 @@ class DetailsPanel(Static):
         *,
         error: str | None = None,
         profile_name: str | None = None,
+        capabilities: Capabilities | None = None,
     ) -> None:
+        self._last = (output, baseline, error, profile_name, capabilities)
+        self._render_details()
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self._last is not None:
+            self._render_details()
+
+    def _render_details(self) -> None:
+        assert self._last is not None
+        output, baseline, error, profile_name, capabilities = self._last
+        assert output is None or isinstance(output, Output)
+        width = max(DETAIL_CELL, self.content_size.width or DETAIL_CELL)
         text = Text()
         if error:
-            text.append("wlr-randr error\n", style="bold red")
-            text.append(error, style="red")
+            text.append("Error: ", style="bold red")
+            text.append(str(error), style="red")
             if output is None:
                 self.update(text)
                 return
-            text.append("\n\n")
+            text.append("\n")
 
         if output is None:
-            text.append("No outputs detected.\n", style="bold yellow")
+            self.border_title = "Output"
+            text.append("No outputs detected. ", style="bold yellow")
             text.append(
-                "Make sure wlr-randr is installed and this terminal is running inside a wlroots compositor.",
-                style="dim",
+                "Make sure wlr-randr is installed and this terminal runs inside "
+                "a wlroots compositor."
             )
             self.update(text)
             return
 
-        text.append(f"{output.name}", style="bold")
+        title = output.name
         if output.title and output.title != output.name:
-            text.append(f"  {output.title}", style="dim")
-        text.append("\n")
+            title = f"{output.name} · {output.title}"
+        self.border_title = title
 
-        mode = output.current_mode
-        badges: list[str] = []
-        if output.adaptive_sync:
-            badges.append("VRR")
-        if output.transform != "normal":
-            badges.append(output.transform)
-        if abs(output.scale - 1.0) > 0.0001:
-            badges.append(f"{output.scale:g}x")
-        rows = [
-            ("State", "on" if output.enabled else "off"),
-            ("Mode", mode.label if mode is not None else "none"),
-            (
-                "Position",
-                f"{output.x},{output.y}  (logical {output.logical_width}x{output.logical_height})",
-            ),
-            ("Scale", f"{output.scale:g}"),
-            ("Transform", output.transform),
-            ("Adaptive sync", "on" if output.adaptive_sync else "off"),
-            ("Physical", f"{output.physical_width}x{output.physical_height} mm"),
-            ("Modes", f"{len(output.modes)} available"),
-        ]
-        for label, value in rows:
-            text.append(f"  {label:<14}", style="dim")
-            text.append(f"{value}\n")
-
-        if badges:
-            text.append(f"  {'Badges':<14}", style="dim")
-            text.append(" ".join(badges), style="yellow")
+        rows = detail_rows(output, capabilities)  # type: ignore[arg-type]
+        if profile_name:
+            rows.append(("Profile", f"{profile_name} (active)"))
+        per_line = max(1, width // DETAIL_CELL)
+        cell = width // per_line
+        for start in range(0, len(rows), per_line):
+            line = Text(no_wrap=True, overflow="ellipsis")
+            for label, value in rows[start : start + per_line]:
+                chunk = Text(no_wrap=True, overflow="ellipsis")
+                chunk.append(f"{label:<{DETAIL_LABEL}}", style="bold")
+                value_style = "green" if label == "Profile" else ""
+                chunk.append(value, style=value_style)
+                chunk.truncate(cell - 1, overflow="ellipsis", pad=True)
+                line.append_text(chunk)
+                line.append(" ")
+            text.append_text(line)
             text.append("\n")
 
-        if profile_name:
-            text.append(f"  {'Profile':<14}", style="dim")
-            text.append(f"{profile_name} (active)\n", style="green")
-
-        pending = _pending_changes(output, baseline)
-        text.append("\n")
+        pending = _pending_changes(output, baseline)  # type: ignore[arg-type]
         if pending:
-            text.append("Pending changes", style="bold yellow")
-            text.append("  (a apply · z reset · Z revert live)\n", style="dim")
-            for change in pending:
-                text.append(f"  • {change}\n", style="yellow")
+            text.append("Pending  ", style="bold yellow")
+            text.append(" · ".join(pending), style="yellow")
         else:
             text.append("No pending changes", style="dim")
-            text.append("\n")
-
-        hints = "c advanced · [ ] scale · r scale picker · f mode picker"
-        if not output.enabled:
-            hints = "Output is off — press space to enable. " + hints
-        text.append(hints, style="dim")
         self.update(text)
 
 
@@ -547,22 +668,107 @@ def _pending_changes(output: Output, baseline: dict[str, object] | None) -> list
 
     if current.enabled != old.enabled:
         changes.append(
-            f"state: {'off' if old.enabled else 'on'} → {'off' if not current.enabled else 'on'}"
+            f"state {'on' if old.enabled else 'off'} → {'on' if current.enabled else 'off'}"
         )
     old_mode = old.mode.key() if old.mode is not None else None
     new_mode = current.mode.key() if current.mode is not None else None
     if old_mode != new_mode and current.mode is not None:
         changes.append(
-            f"mode: {old.mode.label if old.mode else 'none'} → {current.mode.label}"
+            f"mode {old.mode.label if old.mode else 'none'} → {current.mode.label}"
         )
     if (current.x, current.y) != (old.x, old.y):
-        changes.append(f"position: {old.x},{old.y} → {current.x},{current.y}")
+        changes.append(f"position {old.x},{old.y} → {current.x},{current.y}")
     if abs(current.scale - old.scale) > 0.0001:
-        changes.append(f"scale: {old.scale:g} → {current.scale:g}")
+        changes.append(f"scale {old.scale:g} → {current.scale:g}")
     if current.transform != old.transform:
-        changes.append(f"transform: {old.transform} → {current.transform}")
+        changes.append(f"rotation {old.transform} → {current.transform}")
     if current.adaptive_sync != old.adaptive_sync:
         changes.append(
-            f"adaptive sync: {'on' if old.adaptive_sync else 'off'} → {'on' if current.adaptive_sync else 'off'}"
+            f"VRR {_bool_label(old.adaptive_sync).lower()} → "
+            f"{_bool_label(current.adaptive_sync).lower()}"
+        )
+    if current.hdr != old.hdr:
+        changes.append(
+            f"HDR {_optional_label(old.hdr).lower()} → "
+            f"{_optional_label(current.hdr).lower()}"
+        )
+    if current.bit_depth != old.bit_depth:
+        changes.append(
+            f"color depth {_depth_label(old.bit_depth)} → "
+            f"{_depth_label(current.bit_depth)}"
+        )
+    if current.color_profile != old.color_profile:
+        changes.append(
+            f"color profile {color_profile_label(old.color_profile)} → "
+            f"{color_profile_label(current.color_profile)}"
         )
     return changes
+
+
+# ----------------------------------------------------------------------
+# Help bar
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HelpItem:
+    key: str
+    label: str
+    priority: int = 5  # lower survives longer on narrow terminals
+
+
+def layout_help(
+    items: list[HelpItem], width: int, max_lines: int = 2
+) -> list[list[HelpItem]]:
+    """Wrap help items into at most ``max_lines`` lines of ``width`` cells.
+
+    Low-priority items are dropped until everything fits, like impala's
+    narrow-terminal help line.
+    """
+    separator = 3  # " | "
+    remaining = list(items)
+    while True:
+        lines: list[list[HelpItem]] = [[]]
+        used = 0
+        for item in remaining:
+            size = len(item.key) + 1 + len(item.label)
+            extra = size if not lines[-1] else size + separator
+            if lines[-1] and used + extra > width:
+                lines.append([item])
+                used = size
+            else:
+                lines[-1].append(item)
+                used += extra
+        if len(lines) <= max_lines or len(remaining) <= 1:
+            return lines[:max_lines]
+        remaining.remove(max(remaining, key=lambda item: item.priority))
+
+
+class HelpBar(Widget):
+    """Centered, blue, impala-style key hints."""
+
+    can_focus = False
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.items: list[HelpItem] = []
+
+    def set_items(self, items: list[HelpItem]) -> None:
+        self.items = items
+        self.refresh(layout=True)
+
+    def get_content_height(self, container, viewport, width: int) -> int:  # type: ignore[no-untyped-def]
+        return max(1, len(layout_help(self.items, max(1, width))))
+
+    def render(self) -> Text:
+        width = max(1, self.content_size.width)
+        text = Text(justify="center", no_wrap=True, overflow="crop")
+        for index, line in enumerate(layout_help(self.items, width)):
+            if index:
+                text.append("\n")
+            for position, item in enumerate(line):
+                if position:
+                    text.append(" | ", style="blue")
+                text.append(item.key, style="bold blue")
+                text.append(f" {item.label}", style="blue")
+        return text

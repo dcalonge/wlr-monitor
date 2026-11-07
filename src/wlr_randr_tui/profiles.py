@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .model import OutputState
+from .model import OutputState, match_state
 
 SCHEMA_VERSION = 2
 
@@ -22,6 +22,25 @@ class ProfileError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+RESERVED_NAMES = ("__save__", "__launch__")
+
+
+def _validate_name(name: str) -> str:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ProfileError("Profile name must not be empty.")
+    if clean_name in RESERVED_NAMES:
+        raise ProfileError("That profile name is reserved.")
+    # Names are written into compositor config comments, so no newlines.
+    if any(
+        character in "/\\" or not character.isprintable() for character in clean_name
+    ):
+        raise ProfileError(
+            "Profile names cannot contain slashes or control characters."
+        )
+    return clean_name
 
 
 @dataclass
@@ -50,9 +69,14 @@ class Profile:
         for output_name, raw_state in raw_outputs.items():
             if not isinstance(raw_state, dict):
                 raise ProfileError(f"Profile {name!r} has an invalid output entry.")
-            outputs[str(output_name)] = OutputState.from_dict(
-                str(output_name), raw_state
-            )
+            try:
+                outputs[str(output_name)] = OutputState.from_dict(
+                    str(output_name), raw_state
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProfileError(
+                    f"Profile {name!r} has an invalid entry for {output_name}: {exc}"
+                ) from exc
         return cls(
             name=name,
             outputs=outputs,
@@ -61,11 +85,26 @@ class Profile:
         )
 
 
+@dataclass
+class _Snapshot:
+    """The parsed profile file: valid profiles, order and broken entries."""
+
+    profiles: dict[str, Profile] = field(default_factory=dict)
+    order: list[str] = field(default_factory=list)
+    # name -> (raw JSON value, error message); written back untouched.
+    broken: dict[str, tuple[object, str]] = field(default_factory=dict)
+
+
 class ProfileStore:
     """A small JSON file containing named profiles.
 
     The file also keeps a display order so the profile browser can be
-    re-ordered, mirroring hyprmon's profile menu.
+    re-ordered, like hyprmon's profile menu.
+
+    A profile with invalid content (for example an unknown rotation value)
+    does not make the whole file unusable: it is left out of ``load()`` and
+    ``names()``, reported by ``problems()``, raises from ``get()``, and is
+    written back unchanged so editing other profiles never loses it.
     """
 
     def __init__(self, path: Path | str | None = None) -> None:
@@ -78,30 +117,34 @@ class ProfileStore:
         return base / "wlr-randr-tui" / "profiles.json"
 
     def load(self) -> dict[str, Profile]:
-        return self._read()[0]
+        return self._read().profiles
+
+    def problems(self) -> list[str]:
+        """One message per profile that could not be read."""
+        return [message for _raw, message in self._read().broken.values()]
+
+    def exists(self, name: str) -> bool:
+        """True for any stored profile, including one that cannot be read."""
+        snapshot = self._read()
+        return name in snapshot.profiles or name in snapshot.broken
 
     def names(self) -> list[str]:
-        profiles, order = self._read()
-        result = [name for name in order if name in profiles]
-        result.extend(sorted(name for name in profiles if name not in result))
+        snapshot = self._read()
+        result = [name for name in snapshot.order if name in snapshot.profiles]
+        result.extend(sorted(name for name in snapshot.profiles if name not in result))
         return result
 
     def get(self, name: str) -> Profile | None:
-        return self.load().get(name)
+        snapshot = self._read()
+        if name in snapshot.broken:
+            raise ProfileError(snapshot.broken[name][1])
+        return snapshot.profiles.get(name)
 
     def save(self, name: str, states: Iterable[OutputState]) -> Profile:
-        clean_name = name.strip()
-        if not clean_name:
-            raise ProfileError("Profile name must not be empty.")
-        if clean_name == "__save__":
-            raise ProfileError("That profile name is reserved.")
-        if any(character in clean_name for character in "/\\\0"):
-            raise ProfileError(
-                "Profile names cannot contain slashes or control characters."
-            )
+        clean_name = _validate_name(name)
 
-        profiles, order = self._read()
-        existing = profiles.get(clean_name)
+        snapshot = self._read()
+        existing = snapshot.profiles.get(clean_name)
         now = _now()
         profile = Profile(
             name=clean_name,
@@ -109,62 +152,63 @@ class ProfileStore:
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )
-        profiles[clean_name] = profile
-        if clean_name not in order:
-            order.append(clean_name)
-        self._write(profiles, order)
+        # Saving over a broken profile replaces it.
+        snapshot.broken.pop(clean_name, None)
+        snapshot.profiles[clean_name] = profile
+        if clean_name not in snapshot.order:
+            snapshot.order.append(clean_name)
+        self._write(snapshot)
         return profile
 
     def delete(self, name: str) -> bool:
-        profiles, order = self._read()
-        if name not in profiles:
+        snapshot = self._read()
+        if name not in snapshot.profiles and name not in snapshot.broken:
             return False
-        del profiles[name]
-        self._write(profiles, [item for item in order if item != name])
+        snapshot.profiles.pop(name, None)
+        snapshot.broken.pop(name, None)
+        snapshot.order = [item for item in snapshot.order if item != name]
+        self._write(snapshot)
         return True
 
     def rename(self, old_name: str, new_name: str) -> bool:
-        clean_name = new_name.strip()
-        if not clean_name:
-            raise ProfileError("Profile name must not be empty.")
-        if clean_name == "__save__":
-            raise ProfileError("That profile name is reserved.")
-        if any(character in clean_name for character in "/\\\0"):
-            raise ProfileError(
-                "Profile names cannot contain slashes or control characters."
-            )
+        clean_name = _validate_name(new_name)
 
-        profiles, order = self._read()
-        if old_name not in profiles:
+        snapshot = self._read()
+        if old_name in snapshot.broken:
+            raise ProfileError(snapshot.broken[old_name][1])
+        if old_name not in snapshot.profiles:
             return False
-        if clean_name != old_name and clean_name in profiles:
-            raise ProfileError(f"A profile named {clean_name!r} already exists.")
         if clean_name == old_name:
             return True
+        if clean_name in snapshot.profiles or clean_name in snapshot.broken:
+            raise ProfileError(f"A profile named {clean_name!r} already exists.")
 
-        profile = profiles.pop(old_name)
+        profile = snapshot.profiles.pop(old_name)
         profile.name = clean_name
         profile.updated_at = _now()
-        profiles[clean_name] = profile
-        order = [clean_name if item == old_name else item for item in order]
-        self._write(profiles, order)
+        snapshot.profiles[clean_name] = profile
+        snapshot.order = [
+            clean_name if item == old_name else item for item in snapshot.order
+        ]
+        self._write(snapshot)
         return True
 
     def move(self, name: str, offset: int) -> bool:
-        profiles, order = self._read()
-        if name not in profiles:
+        snapshot = self._read()
+        if name not in snapshot.profiles:
             return False
-        order = [item for item in order if item in profiles]
-        order.extend(sorted(item for item in profiles if item not in order))
-        try:
-            index = order.index(name)
-        except ValueError:
-            return False
+        order = [item for item in snapshot.order if item in snapshot.profiles]
+        order.extend(sorted(item for item in snapshot.profiles if item not in order))
+        index = order.index(name)
         target = max(0, min(len(order) - 1, index + offset))
         if target == index:
             return False
         order.insert(target, order.pop(index))
-        self._write(profiles, order)
+        # Broken profiles keep their place at the end of the order.
+        snapshot.order = order + [
+            item for item in snapshot.order if item in snapshot.broken
+        ]
+        self._write(snapshot)
         return True
 
     def find_active(self, states: Iterable[OutputState]) -> str | None:
@@ -175,22 +219,18 @@ class ProfileStore:
         connector names after a replug.
         """
         current = list(states)
+        connected = [state.hardware_id for state in current]
         for name, profile in self.load().items():
             if len(profile.outputs) != len(current):
                 continue
             matched = True
             for current_state in current:
-                saved = profile.outputs.get(current_state.name)
-                if saved is None and current_state.hardware_id:
-                    saved = next(
-                        (
-                            candidate
-                            for candidate in profile.outputs.values()
-                            if candidate.hardware_id
-                            and candidate.hardware_id == current_state.hardware_id
-                        ),
-                        None,
-                    )
+                saved = match_state(
+                    profile.outputs,
+                    current_state.name,
+                    current_state.hardware_id,
+                    connected,
+                )
                 if saved is None or not saved.matches_config(current_state):
                     matched = False
                     break
@@ -198,9 +238,9 @@ class ProfileStore:
                 return name
         return None
 
-    def _read(self) -> tuple[dict[str, Profile], list[str]]:
+    def _read(self) -> _Snapshot:
         if not self.path.exists():
-            return {}, []
+            return _Snapshot()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except OSError as exc:
@@ -214,21 +254,32 @@ class ProfileStore:
         if not isinstance(raw_profiles, dict):
             raise ProfileError(f"{self.path} has an invalid profiles object.")
 
-        profiles: dict[str, Profile] = {}
+        snapshot = _Snapshot()
         for name, raw_profile in raw_profiles.items():
-            if not isinstance(raw_profile, dict):
-                raise ProfileError(f"Profile {name!r} is not an object.")
-            profiles[str(name)] = Profile.from_dict(str(name), raw_profile)
+            key = str(name)
+            try:
+                if not isinstance(raw_profile, dict):
+                    raise ProfileError(f"Profile {key!r} is not an object.")
+                snapshot.profiles[key] = Profile.from_dict(key, raw_profile)
+            except ProfileError as exc:
+                snapshot.broken[key] = (raw_profile, str(exc))
 
         raw_order = data.get("order", [])
-        order = [str(item) for item in raw_order] if isinstance(raw_order, list) else []
-        return profiles, order
+        if isinstance(raw_order, list):
+            snapshot.order = [str(item) for item in raw_order]
+        return snapshot
 
-    def _write(self, profiles: dict[str, Profile], order: list[str]) -> None:
+    def _write(self, snapshot: _Snapshot) -> None:
+        profiles: dict[str, object] = {
+            name: raw for name, (raw, _message) in snapshot.broken.items()
+        }
+        profiles.update(
+            {name: profile.to_dict() for name, profile in snapshot.profiles.items()}
+        )
         payload = {
             "version": SCHEMA_VERSION,
-            "order": [name for name in order if name in profiles],
-            "profiles": {name: profile.to_dict() for name, profile in profiles.items()},
+            "order": [name for name in snapshot.order if name in profiles],
+            "profiles": profiles,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

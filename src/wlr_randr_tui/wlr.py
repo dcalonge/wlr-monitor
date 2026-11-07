@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +25,7 @@ class ApplyResult:
     stdout: str = ""
     stderr: str = ""
     error: str = ""
+    warning: str = ""
 
     @property
     def detail(self) -> str:
@@ -74,7 +75,7 @@ class WlrRandr:
         if state.mode is not None:
             command.extend(["--mode", state.mode.cli_value()])
         command.extend(["--pos", f"{state.x},{state.y}"])
-        command.extend(["--scale", _format_number(state.scale)])
+        command.extend(["--scale", format_number(state.scale)])
         command.extend(["--transform", state.transform])
         command.extend(
             [
@@ -86,48 +87,10 @@ class WlrRandr:
 
     def apply_states(self, states: Iterable[OutputState]) -> list[ApplyResult]:
         self.ensure_available()
-        results: list[ApplyResult] = []
-        for state in states:
-            command = self.command_for(state)
-            try:
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                )
-            except FileNotFoundError as exc:
-                results.append(
-                    ApplyResult(
-                        name=state.name,
-                        command=command,
-                        ok=False,
-                        error=str(exc),
-                    )
-                )
-                continue
-            except subprocess.TimeoutExpired:
-                results.append(
-                    ApplyResult(
-                        name=state.name,
-                        command=command,
-                        ok=False,
-                        error="wlr-randr timed out",
-                    )
-                )
-                continue
-
-            results.append(
-                ApplyResult(
-                    name=state.name,
-                    command=command,
-                    ok=completed.returncode == 0,
-                    stdout=completed.stdout,
-                    stderr=completed.stderr,
-                )
-            )
-        return results
+        return [
+            run_apply_command(state.name, self.command_for(state))
+            for state in apply_order(states)
+        ]
 
     def _run(self, command: Sequence[str]) -> str:
         try:
@@ -152,6 +115,58 @@ class WlrRandr:
         return completed.stdout
 
 
-def _format_number(value: float) -> str:
+def format_number(value: float) -> str:
+    """Format a float without trailing zeros (``1.0`` → ``1``)."""
     text = f"{value:.6f}".rstrip("0").rstrip(".")
     return text or "0"
+
+
+def apply_order(states: Iterable[OutputState]) -> list[OutputState]:
+    """Enable outputs before disabling others, so a session never has none."""
+    items = list(states)
+    return [state for state in items if state.enabled] + [
+        state for state in items if not state.enabled
+    ]
+
+
+def run_apply_command(
+    name: str,
+    command: list[str],
+    *,
+    timeout: float = 15,
+    error_markers: tuple[str, ...] = (),
+    env: Mapping[str, str] | None = None,
+) -> ApplyResult:
+    """Run one configuration command and wrap the outcome in an ApplyResult.
+
+    ``error_markers`` catches tools that report failures on stdout while still
+    exiting with status 0 (mango's ``mmsg`` does this). ``env`` defaults to
+    the current process environment.
+    """
+    tool = Path(command[0]).name if command else "command"
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=dict(env) if env is not None else None,
+        )
+    except FileNotFoundError as exc:
+        return ApplyResult(name=name, command=command, ok=False, error=str(exc))
+    except subprocess.TimeoutExpired:
+        return ApplyResult(
+            name=name, command=command, ok=False, error=f"{tool} timed out"
+        )
+    output = f"{completed.stdout}\n{completed.stderr}"
+    ok = completed.returncode == 0 and not any(
+        marker in output for marker in error_markers
+    )
+    return ApplyResult(
+        name=name,
+        command=command,
+        ok=ok,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )

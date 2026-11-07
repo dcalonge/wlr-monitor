@@ -79,6 +79,11 @@
         }
       );
 
+      # Home Manager module: installs the package, creates the writable
+      # include files and hooks them into the mango / sway configs.
+      homeModules.default = import ./nix/hm-module.nix self;
+      homeManagerModules.default = self.homeModules.default;
+
       formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);
     };
 }

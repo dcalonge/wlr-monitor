@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static
 
+from .compositor import (
+    Backend,
+    Capabilities,
+    Compositor,
+    CompositorError,
+    StateFileError,
+)
 from .layout import Guide, SnapMode, snap_position
 from .model import (
     SCALE_MAX,
@@ -20,6 +25,8 @@ from .model import (
     OutputState,
     clamp_scale,
     common_scales,
+    disables_everything,
+    match_state,
     step_scale,
 )
 from .profiles import ProfileError, ProfileStore
@@ -30,11 +37,13 @@ from .screens import (
     HelpScreen,
     ProfileScreen,
     TextPrompt,
-    UnsupportedScreen,
 )
+from .theme import TERMINAL_THEME
 from .widgets import (
     DetailsPanel,
     DragFinished,
+    HelpBar,
+    HelpItem,
     LayoutMap,
     OutputList,
     OutputMoved,
@@ -42,7 +51,7 @@ from .widgets import (
     OutputSelected,
     OutputToggled,
 )
-from .wlr import ApplyResult, WlrRandr
+from .wlr import ApplyResult
 
 GRID_SIZES = (1, 8, 16, 32, 64)
 DEFAULT_GRID = 32
@@ -50,15 +59,27 @@ DEFAULT_SNAP = SnapMode.EDGES
 DEFAULT_SNAP_THRESHOLD = 10
 STARTUP_PROFILE = "default"
 
-MIRROR_MESSAGE = """\
-Mirroring is a compositor feature that the wlr-output-management
-protocol does not expose. wlr-randr can only position, scale,
-rotate, enable and disable outputs, so this tool cannot mirror
-one monitor onto another.
+# Below these terminal heights the details and outputs sections are hidden,
+# so the layout map stays usable in small floating windows.
+COMPACT_HEIGHT = 26
+TINY_HEIGHT = 17
 
-Arrange the outputs side by side instead, or configure mirroring
-in your compositor's own configuration.
-"""
+MAIN_HELP = [
+    HelpItem("←↓↑→", "Move", 0),
+    HelpItem("⇥", "Next", 1),
+    HelpItem("f", "Mode", 2),
+    HelpItem("r", "Scale", 2),
+    HelpItem("t", "Rotation", 4),
+    HelpItem("v", "VRR", 4),
+    HelpItem("c", "Advanced", 3),
+    HelpItem("Space", "On/off", 4),
+    HelpItem("a", "Apply", 0),
+    HelpItem("z", "Reset", 6),
+    HelpItem("p", "Save profile", 5),
+    HelpItem("o", "Profiles", 3),
+    HelpItem("?", "Help", 1),
+    HelpItem("q", "Quit", 1),
+]
 
 
 class MainScreen(Screen[None]):
@@ -73,6 +94,10 @@ class MainScreen(Screen[None]):
         Binding("shift+tab", "app.previous_output", "Prev", show=False),
     ]
 
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.height < COMPACT_HEIGHT, "-compact")
+        self.set_class(event.size.height < TINY_HEIGHT, "-tiny")
+
 
 class WlrRandrApp(App[None]):
     """Interactive monitor layout editor for wlroots compositors."""
@@ -83,91 +108,90 @@ class WlrRandrApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
+        padding: 1 1 0 1;
+        background: $background;
     }
 
-    #main {
-        height: 1fr;
-    }
-
-    #sidebar {
-        width: 40;
-        height: 1fr;
-        border: round $primary;
-        padding: 0 1;
-    }
-
-    #right {
+    /* Sections: plain borders, the active one heavy and green (impala). */
+    #map, #outputs, #details {
+        border: solid $foreground;
+        border-title-color: $foreground;
+        border-subtitle-color: $foreground;
         width: 1fr;
-        height: 1fr;
     }
 
     #map {
         height: 1fr;
-        min-height: 6;
-        border: round $primary;
+        min-height: 5;
+        border: heavy $success;
+        border-title-style: bold;
+        border-subtitle-style: none;
+        padding: 0 1;
+    }
+
+    #outputs {
+        height: auto;
+        max-height: 40%;
+        padding: 0 1;
     }
 
     #details {
-        height: 13;
-        border: round $primary;
+        height: auto;
+        max-height: 9;
         padding: 0 1;
-        overflow-y: auto;
     }
 
-    #status {
-        height: 1;
+    #help {
+        height: auto;
+        min-height: 2;
         padding: 0 1;
-        background: $panel;
-        color: $text-muted;
+        text-align: center;
+        content-align: center middle;
     }
 
-    OutputList {
-        height: 1fr;
+    MainScreen.-compact #details {
+        display: none;
     }
 
-    LayoutMap {
-        height: 1fr;
+    MainScreen.-tiny #outputs {
+        display: none;
     }
 
+    /* Popups: centered, heavy green border, title in the border. */
     ModalScreen {
         align: center middle;
     }
 
     .dialog {
         width: 72;
+        max-width: 100%;
         height: 75%;
-        border: round $primary;
-        background: $surface;
-        padding: 1 2;
+        border: heavy $success;
+        border-title-color: $foreground;
+        border-title-style: bold;
+        background: $background;
+        padding: 1 2 0 2;
     }
 
     .prompt-dialog {
         height: auto;
-        min-height: 9;
     }
 
     .advanced-dialog {
-        width: 68;
+        width: 76;
         height: auto;
         max-height: 90%;
     }
 
-    .unsupported-dialog {
-        width: 72;
-        height: auto;
-        max-height: 80%;
-    }
-
     .help-dialog {
+        width: 80;
         height: auto;
         max-height: 90%;
         overflow-y: auto;
     }
 
-    .dialog-title {
-        text-style: bold;
-        color: $accent;
-        padding-bottom: 1;
+    .help-extra {
+        padding-top: 1;
     }
 
     .dialog-subtitle {
@@ -176,17 +200,72 @@ class WlrRandrApp(App[None]):
     }
 
     .dialog-help {
-        color: $text-muted;
-        padding-top: 1;
+        color: $primary;
+        text-align: center;
+        padding: 1 0;
     }
 
     .dialog-error {
         color: $error;
     }
 
+    .dialog OptionList {
+        border: none;
+        background: $background;
+        padding: 0;
+    }
+
+    .dialog OptionList:focus {
+        border: none;
+        background-tint: $background 0%;
+    }
+
+    .dialog Input {
+        border: solid $foreground;
+        background: $background;
+    }
+
+    .dialog Input:focus {
+        border: heavy $success;
+    }
+
     #choice-list,
     #profile-list {
         height: 1fr;
+    }
+
+    /* Notifications: top right, heavy border colored by level (impala). */
+    ToastRack {
+        dock: top;
+        align: right top;
+        margin: 0 1 0 0;
+    }
+
+    Toast {
+        width: auto;
+        min-width: 24;
+        max-width: 60%;
+        margin: 0;
+        padding: 0 1;
+        background: $background;
+        border: heavy $success;
+        text-align: center;
+
+        &:ansi {
+            background: $background;
+        }
+    }
+
+    Toast.-information {
+        border: heavy $success;
+    }
+
+    Toast.-warning {
+        border: heavy $warning;
+    }
+
+    Toast.-error {
+        border: heavy $error;
     }
     """
 
@@ -205,12 +284,11 @@ class WlrRandrApp(App[None]):
         Binding("L", "cycle_snap", "Snap"),
         Binding("r,R", "pick_scale", "Scale"),
         Binding("f,F", "pick_mode", "Mode"),
-        Binding("t", "pick_transform", "Transform"),
+        Binding("t", "pick_transform", "Rotation"),
         Binding("v", "toggle_adaptive", "VRR"),
         Binding("left_square_bracket", "scale_down", show=False),
         Binding("right_square_bracket", "scale_up", show=False),
         Binding("c,C,d,D", "advanced", "Advanced"),
-        Binding("m,M", "mirror", "Mirror"),
         Binding("space,enter", "toggle_enabled", "On/off"),
         Binding("a,A", "apply", "Apply"),
         Binding("ctrl+r", "reload", "Reload"),
@@ -223,14 +301,16 @@ class WlrRandrApp(App[None]):
 
     def __init__(
         self,
-        backend: WlrRandr | Any | None = None,
+        backend: Backend | Any | None = None,
         store: ProfileStore | None = None,
         *,
         initial_outputs: list[Output] | None = None,
         profiles_only: bool = False,
     ) -> None:
-        super().__init__()
-        self.backend = backend if backend is not None else WlrRandr()
+        super().__init__(ansi_color=True)
+        self.register_theme(TERMINAL_THEME)
+        self.theme = TERMINAL_THEME.name
+        self.backend = backend if backend is not None else Backend()
         self.store = store if store is not None else ProfileStore()
         self._initial_outputs = initial_outputs
         self._profiles_only = profiles_only
@@ -248,16 +328,20 @@ class WlrRandrApp(App[None]):
         self._drag_raw: dict[str, tuple[float, float]] = {}
         self._rollback: list[OutputState] | None = None
 
+    @property
+    def compositor(self) -> Compositor:
+        compositor = getattr(self.backend, "compositor", None)
+        return compositor if isinstance(compositor, Compositor) else Compositor()
+
+    @property
+    def capabilities(self) -> Capabilities:
+        return self.compositor.capabilities
+
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Horizontal(id="main"):
-            with Vertical(id="sidebar"):
-                yield OutputList(id="outputs")
-            with Vertical(id="right"):
-                yield LayoutMap(id="map")
-                yield DetailsPanel(id="details")
-        yield Static("", id="status")
-        yield Footer()
+        yield LayoutMap(id="map")
+        yield OutputList(id="outputs")
+        yield DetailsPanel(id="details")
+        yield HelpBar(id="help")
 
     def get_default_screen(self) -> Screen[None]:
         return MainScreen()
@@ -270,12 +354,46 @@ class WlrRandrApp(App[None]):
 
     def on_mount(self) -> None:
         self._ui_ready = True
+        self.query_one(HelpBar).set_items(MAIN_HELP)
         if self._initial_outputs is not None:
             self._set_outputs(self._initial_outputs)
-        else:
-            self._reload_from_backend()
+        elif self._reload_from_backend():
+            self._ensure_include()
         if self._profiles_only:
             self.call_after_refresh(self.action_open_profiles)
+        hint = self._include_hint()
+        if hint:
+            self.notify(hint, title="Setup", severity="information", timeout=8)
+
+    def _ensure_include(self) -> None:
+        """Create the include from the live layout if it does not exist yet.
+
+        Only for compositors that refuse a missing include (niri), so the
+        suggested line can be added safely. mango and sway ignore a missing
+        file, and writing one there could trigger a config reload just by
+        opening the TUI.
+        """
+        compositor = self.compositor
+        path = compositor.include_path()
+        if (
+            path is None
+            or not compositor.include_must_exist
+            or not compositor.write_include_enabled
+            or path.exists()
+        ):
+            return
+        try:
+            compositor.write_include(self.outputs)
+        except StateFileError:
+            pass  # the include exists now, which is all niri needs
+        except (CompositorError, OSError) as exc:
+            self._notify(str(exc), severity="warning")
+
+    def _include_hint(self) -> str:
+        try:
+            return self.compositor.include_hint()
+        except OSError:
+            return ""
 
     @property
     def current(self) -> Output | None:
@@ -349,10 +467,11 @@ class WlrRandrApp(App[None]):
             self.baseline.get(current_name) if current_name is not None else None,
             error=self._error,
             profile_name=self.active_profile,
+            capabilities=self.capabilities,
         )
         self._update_status()
 
-    def _update_status(self) -> None:
+    def status_line(self) -> str:
         parts = [
             f"grid {self.grid}px",
             f"snap {self.snap_mode.label}",
@@ -363,7 +482,12 @@ class WlrRandrApp(App[None]):
         if dirty:
             parts.append(f"{len(dirty)} pending")
         parts.append(self.status)
-        self.query_one("#status", Static).update("  ·  ".join(parts))
+        return " · ".join(parts)
+
+    def _update_status(self) -> None:
+        if not self._ui_ready:
+            return
+        self.query_one(LayoutMap).border_subtitle = self.status_line()
 
     def _select_name(self, name: str) -> None:
         for index, output in enumerate(self.outputs):
@@ -378,7 +502,8 @@ class WlrRandrApp(App[None]):
     def _notify(self, message: str, severity: str = "information") -> None:
         self.status = message
         self._update_status()
-        self.notify(message, severity=severity, timeout=4)
+        title = {"warning": "Warning", "error": "Error"}.get(severity, "Info")
+        self.notify(message, title=title, severity=severity, timeout=4)
 
     def _reload_from_backend(self) -> bool:
         current = self.current
@@ -400,13 +525,31 @@ class WlrRandrApp(App[None]):
         success_message: str,
         *,
         remember_previous: bool = True,
+        profile: str | None = None,
     ) -> bool:
         if not states:
             self._notify("Nothing to apply.", severity="warning")
             return False
+        live_enabled = {
+            output.name: bool(
+                self.baseline.get(output.name, {}).get("enabled", output.enabled)
+            )
+            for output in self.outputs
+        }
+        if disables_everything(live_enabled, states):
+            # The same rule as the on/off toggle, enforced for every path
+            # (advanced dialog, profiles, revert).
+            self._notify(
+                "Refusing to apply: it would turn off every monitor.",
+                severity="error",
+            )
+            return False
         previous = self.baseline_states() if remember_previous else None
         try:
-            results = self.backend.apply_states(states)
+            if profile is not None:
+                results = self.backend.apply_states(states, profile=profile)
+            else:
+                results = self.backend.apply_states(states)
         except Exception as exc:  # noqa: BLE001
             self._error = str(exc)
             self._sync()
@@ -419,6 +562,7 @@ class WlrRandrApp(App[None]):
             self._sync()
             self._notify(self._error, severity="error")
             return False
+        warnings = [result.warning for result in results if result.warning]
 
         self._error = None
         if previous is not None:
@@ -436,10 +580,16 @@ class WlrRandrApp(App[None]):
             self.active_profile = self._detect_active_profile()
             self._sync()
             self._notify(success_message)
+            self._show_warnings(warnings)
             return True
         self._set_outputs(outputs, keep_name=current_name)
         self._notify(success_message)
+        self._show_warnings(warnings)
         return True
+
+    def _show_warnings(self, warnings: list[str]) -> None:
+        for warning in dict.fromkeys(warnings):
+            self.notify(warning, title="Warning", severity="warning", timeout=8)
 
     # ------------------------------------------------------------------
     # Keyboard actions
@@ -449,7 +599,32 @@ class WlrRandrApp(App[None]):
         self.exit()
 
     def action_help(self) -> None:
-        self.push_screen(HelpScreen())
+        self.push_screen(HelpScreen(self._help_extra()))
+
+    def _help_extra(self) -> str:
+        compositor = self.compositor
+        lines = [f"Compositor: {compositor.label}"]
+        path = compositor.include_path()
+        if path is not None and compositor.write_include_enabled:
+            lines.append(
+                f"Applied layouts are written to {compositor.display_path(path)}."
+            )
+            try:
+                sourced = compositor.include_is_sourced()
+            except OSError:
+                sourced = False
+            if sourced:
+                lines.append("Your compositor config includes it.")
+            else:
+                lines.append(
+                    f"Add this line to your config: {compositor.include_line()}"
+                )
+        elif path is None:
+            lines.append(
+                "Changes are applied with wlr-randr only; HDR and color "
+                "settings need mango, sway or niri."
+            )
+        return "\n".join(lines)
 
     def action_next_output(self) -> None:
         if not self.outputs:
@@ -644,10 +819,10 @@ class WlrRandrApp(App[None]):
                 return
             output.transform = choice
             self._clear_guides()
-            self.status = f"{output.name}: transform {choice}"
+            self.status = f"{output.name}: rotation {choice}"
             self._sync()
 
-        self.push_screen(ChoiceScreen("Transform", choices, selected=selected), done)
+        self.push_screen(ChoiceScreen("Rotation", choices, selected=selected), done)
 
     def action_toggle_adaptive(self) -> None:
         output = self.current
@@ -655,9 +830,7 @@ class WlrRandrApp(App[None]):
             return
         output.adaptive_sync = not output.adaptive_sync
         self._clear_guides()
-        self.status = (
-            f"{output.name}: adaptive sync {'on' if output.adaptive_sync else 'off'}"
-        )
+        self.status = f"{output.name}: VRR {'on' if output.adaptive_sync else 'off'}"
         self._sync()
 
     def _toggle_output(self, name: str) -> None:
@@ -691,10 +864,18 @@ class WlrRandrApp(App[None]):
                 self.status = f"{output.name}: advanced settings cancelled"
             self._sync()
 
-        self.push_screen(AdvancedSettingsScreen(output), done)
-
-    def action_mirror(self) -> None:
-        self.push_screen(UnsupportedScreen("Mirroring", MIRROR_MESSAGE))
+        self.push_screen(
+            AdvancedSettingsScreen(
+                output,
+                self.capabilities,
+                compositor_label=self.compositor.label,
+                color_ok=self.compositor.color_profile_supported,
+                can_disable=any(
+                    item.enabled for item in self.outputs if item is not output
+                ),
+            ),
+            done,
+        )
 
     def action_apply(self) -> None:
         dirty = [output for output in self.outputs if output.name in self.dirty_names]
@@ -715,7 +896,7 @@ class WlrRandrApp(App[None]):
             if raw is None:
                 continue
             try:
-                OutputState.from_dict(output.name, raw).apply_to(output)
+                OutputState.from_dict(output.name, raw).apply_to(output, restore=True)
             except (KeyError, TypeError, ValueError):
                 continue
         self._clear_guides()
@@ -783,7 +964,7 @@ class WlrRandrApp(App[None]):
             self._notify("There are no outputs to save.", severity="warning")
             return
         try:
-            exists = STARTUP_PROFILE in self.store.names()
+            exists = self.store.exists(STARTUP_PROFILE)
         except ProfileError as exc:
             self._notify(str(exc), severity="error")
             return
@@ -849,21 +1030,17 @@ class WlrRandrApp(App[None]):
             return False
 
         states: list[OutputState] = []
+        connected = [output.hardware_id for output in self.outputs]
         for output in self.outputs:
-            state = profile.outputs.get(output.name)
-            if state is None and output.hardware_id:
-                state = next(
-                    (
-                        candidate
-                        for candidate in profile.outputs.values()
-                        if candidate.hardware_id
-                        and candidate.hardware_id == output.hardware_id
-                    ),
-                    None,
-                )
+            state = match_state(
+                profile.outputs, output.name, output.hardware_id, connected
+            )
             if state is None:
                 continue
             state.apply_to(output)
+            # A profile saved on another compositor may carry settings this
+            # one cannot apply; drop them so they don't show as pending.
+            self.compositor.drop_unsupported([output])
             states.append(output.state())
         if not states:
             self._notify(
@@ -871,7 +1048,7 @@ class WlrRandrApp(App[None]):
                 severity="warning",
             )
             return False
-        return self._apply_states(states, f"Applied profile {name!r}.")
+        return self._apply_states(states, f"Applied profile {name!r}.", profile=name)
 
     # ------------------------------------------------------------------
     # Mouse events
@@ -938,7 +1115,7 @@ class WlrRandrApp(App[None]):
 
 
 def _quantize(value: float, grid: int) -> int:
-    """Quantise a position to a grid, truncating like hyprmon does."""
+    """Quantize a position to a grid, truncating like hyprmon does."""
     if grid <= 1:
         return round(value)
     return int(value / grid) * grid
@@ -951,4 +1128,4 @@ def _format_failures(failures: list[ApplyResult]) -> str:
         parts.append(f"{failure.name}: {detail}")
     if len(failures) > 3:
         parts.append(f"and {len(failures) - 3} more")
-    return "wlr-randr failed — " + "; ".join(parts)
+    return "Apply failed — " + "; ".join(parts)

@@ -178,3 +178,70 @@ def test_find_active_requires_the_same_output_count(tmp_path: Path) -> None:
     store.save("work", [state])
     second = sample_state(name="eDP-1")
     assert store.find_active([state, second]) is None
+
+
+def test_control_characters_are_rejected(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "profiles.json")
+    # Profile names end up in compositor config comments.
+    with pytest.raises(ProfileError, match="control characters"):
+        store.save("work\nexec evil", [sample_state()])
+    store.save("work", [sample_state()])
+    with pytest.raises(ProfileError):
+        store.rename("work", "a\tb")
+    with pytest.raises(ProfileError):
+        store.save("__launch__", [sample_state()])
+
+
+def test_compositor_settings_round_trip_and_match_loosely(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "profiles.json")
+    state = sample_state()
+    state.hdr = True
+    state.color_profile = "srgb"
+    store.save("hdr", [state])
+    profile = store.get("hdr")
+    assert profile is not None
+    saved = profile.outputs["HDMI-A-1"]
+    assert saved.hdr is True
+    assert saved.color_profile == "srgb"
+    assert saved.bit_depth is None
+
+    # Live state without HDR information still matches the profile...
+    assert store.find_active([sample_state()]) == "hdr"
+    # ...but a known, different HDR state does not.
+    live = sample_state()
+    live.hdr = False
+    assert store.find_active([live]) is None
+
+
+def test_one_broken_profile_does_not_hide_the_others(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.json"
+    store = ProfileStore(path)
+    store.save("work", [sample_state()])
+    store.save("home", [sample_state(x=100)])
+    raw = json.loads(path.read_text())
+    raw["profiles"]["work"]["outputs"]["HDMI-A-1"]["transform"] = "normal; exec x"
+    path.write_text(json.dumps(raw))
+
+    assert store.names() == ["home"]
+    assert list(store.load()) == ["home"]
+    assert len(store.problems()) == 1
+    assert "invalid transform" in store.problems()[0]
+    with pytest.raises(ProfileError, match="invalid transform"):
+        store.get("work")
+    with pytest.raises(ProfileError):
+        store.rename("work", "office")
+    with pytest.raises(ProfileError, match="already exists"):
+        store.rename("home", "work")
+
+    # Editing other profiles keeps the broken one byte-for-byte.
+    store.save("docked", [sample_state(x=200)])
+    assert store.move("docked", -1)
+    kept = json.loads(path.read_text())
+    assert kept["profiles"]["work"] == raw["profiles"]["work"]
+    assert kept["order"] == ["docked", "home", "work"]
+
+    # Saving over it, or deleting it, clears the problem.
+    store.save("work", [sample_state()])
+    assert store.problems() == []
+    assert store.delete("work")
+    assert "work" not in json.loads(path.read_text())["profiles"]
