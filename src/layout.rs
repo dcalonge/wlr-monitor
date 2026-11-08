@@ -7,42 +7,6 @@ use crate::output::Output;
 /// A terminal cell is about twice as tall as it is wide.
 const CELL_ASPECT: f64 = 2.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapMode {
-    Off,
-    Edges,
-    Centers,
-    Both,
-}
-
-impl SnapMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Edges => "Edges",
-            Self::Centers => "Centers",
-            Self::Both => "Both",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Off => Self::Edges,
-            Self::Edges => Self::Centers,
-            Self::Centers => Self::Both,
-            Self::Both => Self::Off,
-        }
-    }
-
-    fn edges(self) -> bool {
-        matches!(self, Self::Edges | Self::Both)
-    }
-
-    fn centers(self) -> bool {
-        matches!(self, Self::Centers | Self::Both)
-    }
-}
-
 /// An alignment guide at a logical coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guide {
@@ -159,12 +123,8 @@ pub fn snap(
     index: usize,
     x: i32,
     y: i32,
-    mode: SnapMode,
     threshold: i32,
 ) -> (i32, i32, Vec<Guide>) {
-    if mode == SnapMode::Off {
-        return (x, y, Vec::new());
-    }
     let (width, height) = outputs[index].logical_size();
     let near = |a: i32, b: i32| (a - b).abs() < threshold;
     let (mut new_x, mut new_y) = (x, y);
@@ -182,7 +142,7 @@ pub fn snap(
     for (_, other) in others {
         let (ox, oy) = (other.position.x, other.position.y);
         let (ow, oh) = other.logical_size();
-        if mode.edges() {
+        {
             if near(x, ox + ow) {
                 new_x = ox + ow;
                 guide(Guide::Vertical(new_x));
@@ -202,18 +162,6 @@ pub fn snap(
             } else if near(y, oy) {
                 new_y = oy;
                 guide(Guide::Horizontal(new_y));
-            }
-        }
-        if mode.centers() {
-            let (center_x, other_x) = (x + width / 2, ox + ow / 2);
-            let (center_y, other_y) = (y + height / 2, oy + oh / 2);
-            if near(center_x, other_x) {
-                new_x = other_x - width / 2;
-                guide(Guide::Vertical(other_x));
-            }
-            if near(center_y, other_y) {
-                new_y = other_y - height / 2;
-                guide(Guide::Horizontal(other_y));
             }
         }
     }
@@ -254,16 +202,15 @@ mod tests {
     }
 
     #[test]
-    fn snaps_to_edges_and_origin_but_not_when_off_or_far() {
+    fn snaps_to_edges_and_origin_but_not_when_far() {
         let outputs = fixture_outputs();
         // eDP-1 sits to the right of HDMI-A-1 (1920 wide).
-        let (x, y, guides) = snap(&outputs, 1, 1915, 4, SnapMode::Both, 8);
+        let (x, y, guides) = snap(&outputs, 1, 1915, 4, 8);
         assert_eq!((x, y), (1920, 0));
         assert!(guides.contains(&Guide::Vertical(1920)));
         assert!(guides.contains(&Guide::Horizontal(0)));
 
-        assert_eq!(snap(&outputs, 1, 1915, 4, SnapMode::Off, 8).0, 1915);
-        let (x, y, guides) = snap(&outputs, 1, 3000, 4000, SnapMode::Both, 8);
+        let (x, y, guides) = snap(&outputs, 1, 3000, 4000, 8);
         assert_eq!((x, y), (3000, 4000));
         assert!(guides.is_empty());
     }

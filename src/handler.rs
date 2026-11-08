@@ -64,7 +64,7 @@ fn main_key(app: &mut App, key: KeyEvent) {
             'J' => app.move_by(0, 1, 10),
             'H' => app.move_by(-1, 0, 10),
             'g' | 'G' => app.cycle_grid(),
-            'L' => app.cycle_snap(),
+            'L' => app.toggle_snap(),
             'r' | 'R' => app.pick_scale(),
             'f' | 'F' => app.pick_mode(),
             't' => app.pick_transform(),

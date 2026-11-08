@@ -80,10 +80,6 @@ pub struct Size {
     pub height: i32,
 }
 
-/// Width, height and refresh rate in millihertz: a mode's identity, which
-/// ignores the current/preferred flags.
-pub type ModeKey = (i32, i32, i64);
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mode {
     pub width: i32,
@@ -96,7 +92,9 @@ pub struct Mode {
 }
 
 impl Mode {
-    pub fn key(&self) -> ModeKey {
+    /// Width, height and refresh rate in millihertz: a mode's identity, which
+    /// ignores the current/preferred flags.
+    pub fn key(&self) -> (i32, i32, i64) {
         (
             self.width,
             self.height,

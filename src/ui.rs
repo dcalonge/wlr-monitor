@@ -69,7 +69,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn hint_line() -> Line<'static> {
     let spans = HINTS.iter().flat_map(|(key, what)| {
         [
-            Span::styled(*key, theme::key()),
+            Span::styled(*key, Style::new().fg(Color::Blue).bold()),
             Span::raw(format!(" {what}  ")),
         ]
     });
@@ -107,7 +107,7 @@ fn draw_map(frame: &mut Frame, app: &mut App, area: Rect) {
         draw_guides(frame.buffer_mut(), app, geometry, inner);
     } else if let Some(error) = &app.error {
         let text = Paragraph::new(error.as_str())
-            .style(theme::fg(Color::Red))
+            .style(Style::new().fg(Color::Red))
             .wrap(Wrap { trim: true });
         frame.render_widget(text, inner);
     } else if !app.loading {
@@ -135,7 +135,7 @@ fn draw_output(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
     let output = &app.outputs[index];
     let selected = index == app.selected;
     let style = if selected {
-        theme::bold_fg(Color::Green)
+        Style::new().fg(Color::Green).bold()
     } else if app.is_dirty(output) {
         theme::pending()
     } else if !output.enabled {
@@ -227,7 +227,8 @@ fn draw_guides(buf: &mut Buffer, app: &App, geometry: &Geometry, map: Rect) {
 fn guide_cell(buf: &mut Buffer, x: u16, y: u16, symbol: &str) {
     // Only empty cells: a guide never overwrites an output's text or border.
     if let Some(cell) = buf.cell_mut((x, y)).filter(|cell| cell.symbol() == " ") {
-        cell.set_symbol(symbol).set_style(theme::fg(Color::Blue));
+        cell.set_symbol(symbol)
+            .set_style(Style::new().fg(Color::Blue));
     }
 }
 
@@ -239,7 +240,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     let header = Row::new([
         "", "Name", "Mode", "State", "Scale", "Position", "Rotation", "VRR",
     ])
-    .style(theme::bold());
+    .style(Style::new().bold());
     let rows = app.outputs.iter().enumerate().map(|(index, output)| {
         let dirty = app.is_dirty(output);
         let mode = output.mode.as_ref().map_or("-".into(), |mode| mode.label());
@@ -252,7 +253,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
             if output.enabled {
                 Style::new()
             } else {
-                theme::fg(Color::Red)
+                Style::new().fg(Color::Red)
             },
         );
         let row = Row::new([
@@ -401,7 +402,7 @@ fn draw_toasts(frame: &mut Frame, app: &App) {
         let rect = Rect::new(area.right() - width, y, width, height);
         let block = Block::bordered()
             .border_type(BorderType::Thick)
-            .border_style(theme::fg(severity.color()))
+            .border_style(Style::new().fg(severity.color()))
             .title(severity.title());
         frame.render_widget(Clear, rect);
         frame.render_widget(

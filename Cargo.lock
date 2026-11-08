@@ -1972,7 +1972,6 @@ dependencies = [
  "shellexpand",
  "tempfile",
  "tui-input",
- "unicode-width",
  "wait-timeout",
 ]
 

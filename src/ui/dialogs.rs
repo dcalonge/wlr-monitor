@@ -2,12 +2,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, Paragraph, Wrap};
 
 use crate::app::App;
-use crate::dialog::{Advanced, Choice, Confirm, Dialog, Help, Profiles, Prompt};
+use crate::dialog::{Advanced, Choice, Dialog, Help, Profiles, Prompt};
 use crate::theme;
 
 const HELP_TEXT: &str = "\
@@ -15,7 +15,7 @@ Move
   ←↓↑→ / hjkl            move by the grid size
   Shift + arrows         move by 10× the grid size
   g                      cycle grid size (1, 8, 16, 32, 64 px)
-  L                      cycle snap mode (Off, Edges, Centers, Both)
+  L                      toggle snapping to other outputs
 
 Display
   Tab / Shift+Tab        select next / previous output
@@ -61,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match dialog {
         Dialog::Choice(choice) => draw_choice(frame, area, choice),
         Dialog::Prompt(prompt) => draw_prompt(frame, area, prompt),
-        Dialog::Confirm(confirm) => draw_confirm(frame, area, confirm),
+        Dialog::Confirm(message) => draw_confirm(frame, area, message),
         Dialog::Advanced(advanced) => draw_advanced(frame, area, advanced, compositor),
         Dialog::Profiles(profiles) => draw_profiles(frame, area, profiles),
         Dialog::Help(help) => draw_help(frame, area, help),
@@ -132,13 +132,9 @@ fn draw_prompt(frame: &mut Frame, area: Rect, prompt: &Prompt) {
     frame.set_cursor_position((inner.x + cursor.min(inner.width.saturating_sub(1)), inner.y));
 }
 
-fn draw_confirm(frame: &mut Frame, area: Rect, confirm: &Confirm) {
+fn draw_confirm(frame: &mut Frame, area: Rect, message: &str) {
     let inner = open(frame, area, 60, 6, "Confirm");
-    let lines = vec![
-        Line::raw(confirm.message.as_str()),
-        Line::raw(""),
-        hint("y Yes, n No"),
-    ];
+    let lines = vec![Line::raw(message), Line::raw(""), hint("y Yes, n No")];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
@@ -201,7 +197,7 @@ fn draw_profiles(frame: &mut Frame, area: Rect, profiles: &mut Profiles) {
         )));
     }
     if let Some(error) = &profiles.error {
-        footer.push(Line::styled(error.as_str(), theme::fg(Color::Red)));
+        footer.push(Line::styled(error.as_str(), Style::new().fg(Color::Red)));
     }
     footer.extend(
         profiles

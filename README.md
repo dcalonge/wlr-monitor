@@ -23,7 +23,7 @@ foot / kitty / alacritty theme without configuration.
  ┃    ┃                              ┃│        VRR x1.2        │    ┃
  ┃    ┃                              ┃└────────────────────────┘    ┃
  ┃    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                              ┃
- ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ grid 32px · snap Edges · Ready. ━┛
+ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ grid 32px · snap on · Ready. ━┛
  ┌─ Outputs ──────────────────────────────────────────────────────────┐
  │          Name           Mode      State Scale   Position  VRR      │
  │                                                                    │
@@ -127,7 +127,7 @@ the outputs and discards pending edits.
 | `Shift` + arrows / `K` `J` `H` | Move by 10× the grid size |
 | `Tab` / `Shift+Tab` | Select next / previous output |
 | `g` / `G` | Cycle grid size (1, 8, 16, 32, 64 px) |
-| `L` | Cycle snap mode (Off, Edges, Centers, Both) |
+| `L` | Toggle snapping to other outputs and the origin |
 | `f` / `F` | Pick resolution and refresh rate |
 | `r` / `R` | Open the scale picker |
 | `[` / `]` | Scale down / up by 0.05 |

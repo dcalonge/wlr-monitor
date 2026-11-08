@@ -16,13 +16,12 @@ categories = ["command-line-utilities"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
-ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "unstable-rendered-line-info"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shellexpand = "3"
 tempfile = "3"
 tui-input = "0.15"
-unicode-width = "0.2"
 wait-timeout = "0.2"
 
 [profile.release]

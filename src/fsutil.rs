@@ -28,13 +28,12 @@ pub fn write_if_changed(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     write_atomic(path, data, mode)
 }
 
-pub fn home_dir() -> PathBuf {
-    std::env::home_dir().unwrap_or_default()
-}
-
 /// An XDG base directory: `$var` when set, else `~/fallback`.
 pub fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
     std::env::var_os(var)
         .filter(|value| !value.is_empty())
-        .map_or_else(|| home_dir().join(fallback), PathBuf::from)
+        .map_or_else(
+            || std::env::home_dir().unwrap_or_default().join(fallback),
+            PathBuf::from,
+        )
 }

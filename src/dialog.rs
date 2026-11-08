@@ -14,7 +14,8 @@ use crate::profile::ProfileStore;
 pub enum Dialog {
     Choice(Choice),
     Prompt(Prompt),
-    Confirm(Confirm),
+    /// Overwrite the startup profile? Holds the question.
+    Confirm(String),
     Advanced(Box<Advanced>),
     Profiles(Box<Profiles>),
     Help(Help),
@@ -137,17 +138,6 @@ impl Prompt {
             }
         }
     }
-}
-
-// ----- Confirm -----
-
-pub enum ConfirmFor {
-    OverwriteStartup,
-}
-
-pub struct Confirm {
-    pub message: String,
-    pub confirm_for: ConfirmFor,
 }
 
 // ----- Help -----

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::apply::{Applied, ApplyResult};
 use crate::exec::{run_tool, which};
-use crate::fsutil::{home_dir, write_if_changed, xdg_dir};
+use crate::fsutil::{write_if_changed, xdg_dir};
 use crate::output::{Output, OutputState, is_printable, match_state};
 use crate::wlr_randr::WlrRandr;
 
@@ -221,7 +221,7 @@ impl Compositor {
             kind,
             include,
             include_enabled,
-            home_dir(),
+            std::env::home_dir().unwrap_or_default(),
             xdg_dir("XDG_CONFIG_HOME", ".config"),
             xdg_dir("XDG_STATE_HOME", ".local/state"),
         )

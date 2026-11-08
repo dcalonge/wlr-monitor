@@ -6,9 +6,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::{App, STARTUP_PROFILE};
 use crate::dialog::{
-    AdvancedKey, ChoiceFor, ConfirmFor, Dialog, ListKey, ProfilesKey, Prompt, PromptFor, PromptKey,
+    AdvancedKey, ChoiceFor, Dialog, ListKey, ProfilesKey, Prompt, PromptFor, PromptKey,
 };
-use crate::fsutil::home_dir;
 use crate::notification::Severity;
 use crate::output::Transform;
 
@@ -117,12 +116,9 @@ impl App {
     }
 
     fn finish_confirm(&mut self, confirmed: bool) {
-        let Some(Dialog::Confirm(confirm)) = self.dialogs.pop() else {
-            return;
-        };
-        match confirm.confirm_for {
-            ConfirmFor::OverwriteStartup if confirmed => self.save_profile(STARTUP_PROFILE),
-            ConfirmFor::OverwriteStartup => {}
+        self.dialogs.pop();
+        if confirmed {
+            self.save_profile(STARTUP_PROFILE);
         }
     }
 
@@ -145,7 +141,7 @@ impl App {
 
     /// The ICC path prompt was answered: hand a usable profile to the advanced dialog.
     fn finish_icc(&mut self, answer: &str) {
-        let home = home_dir();
+        let home = std::env::home_dir().unwrap_or_default();
         let expanded = shellexpand::tilde_with_context(answer, || Some(home.to_string_lossy()));
         let path = Path::new(expanded.as_ref());
         let profile = format!("icc:{}", path.display());

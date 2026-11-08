@@ -8,10 +8,8 @@ use ratatui::layout::Rect;
 
 use crate::backend::Backend;
 use crate::compositor::Compositor;
-use crate::dialog::{
-    Advanced, Choice, ChoiceFor, Confirm, ConfirmFor, Dialog, Help, Profiles, Prompt, PromptFor,
-};
-use crate::layout::{Geometry, Guide, SnapMode, snap};
+use crate::dialog::{Advanced, Choice, ChoiceFor, Dialog, Help, Profiles, Prompt, PromptFor};
+use crate::layout::{Geometry, Guide, snap};
 use crate::notification::{Notifications, Severity};
 use crate::output::{
     Mode, Output, OutputState, SCALE_MAX, SCALE_MIN, Transform, clamp_scale, common_scales,
@@ -76,7 +74,7 @@ pub struct App {
     pub baseline: HashMap<String, OutputState>,
     pub selected: usize,
     pub grid: i32,
-    pub snap_mode: SnapMode,
+    pub snap: bool,
     pub guides: Vec<Guide>,
     pub active_profile: Option<String>,
     pub status: String,
@@ -103,7 +101,7 @@ impl App {
             baseline: HashMap::new(),
             selected: 0,
             grid: 32,
-            snap_mode: SnapMode::Edges,
+            snap: true,
             guides: Vec::new(),
             active_profile: None,
             status: "Ready.".into(),
@@ -213,7 +211,7 @@ impl App {
     pub fn status_line(&self) -> String {
         let mut parts = vec![
             format!("grid {}px", self.grid),
-            format!("snap {}", self.snap_mode.label()),
+            format!("snap {}", if self.snap { "on" } else { "off" }),
         ];
         if let Some(profile) = &self.active_profile {
             parts.push(format!("profile {profile}"));
@@ -369,7 +367,11 @@ impl App {
 
     /// Move an output to a position, snapped to the other outputs.
     fn place(&mut self, index: usize, x: i32, y: i32) {
-        let (x, y, guides) = snap(&self.outputs, index, x, y, self.snap_mode, SNAP_THRESHOLD);
+        let (x, y, guides) = if self.snap {
+            snap(&self.outputs, index, x, y, SNAP_THRESHOLD)
+        } else {
+            (x, y, Vec::new())
+        };
         self.guides = guides;
         let output = &mut self.outputs[index];
         output.position.x = x;
@@ -386,10 +388,10 @@ impl App {
         self.status = format!("Grid: {}px", self.grid);
     }
 
-    pub fn cycle_snap(&mut self) {
-        self.snap_mode = self.snap_mode.next();
+    pub fn toggle_snap(&mut self) {
+        self.snap = !self.snap;
         self.guides.clear();
-        self.status = format!("Snap: {}", self.snap_mode.label());
+        self.status = format!("Snap: {}", if self.snap { "on" } else { "off" });
     }
 
     /// Edit the output at `index`, then drop the guides and say what changed.
@@ -640,11 +642,7 @@ impl App {
                 let message = format!(
                     "A profile named {STARTUP_PROFILE:?} already exists. Overwrite it with the current layout?"
                 );
-                let confirm = Confirm {
-                    message,
-                    confirm_for: ConfirmFor::OverwriteStartup,
-                };
-                self.open(Dialog::Confirm(confirm));
+                self.open(Dialog::Confirm(message));
             }
         }
     }
@@ -779,7 +777,7 @@ mod tests {
     fn moving_marks_the_output_pending_and_reset_undoes_it() {
         let mut app = app();
         assert_eq!(app.dirty_count(), 0);
-        app.snap_mode = SnapMode::Off;
+        app.snap = false;
         app.move_by(1, 0, 1);
         assert_eq!(app.outputs[0].position.x, 32);
         assert_eq!(app.dirty_count(), 1);
@@ -799,7 +797,7 @@ mod tests {
     #[test]
     fn dragging_moves_by_logical_pixels_on_the_grid() {
         let mut app = app();
-        app.snap_mode = SnapMode::Off;
+        app.snap = false;
         app.areas.geometry = Geometry::new(&app.outputs, 100, 30);
         app.start_drag(0, 5, 5);
         app.drag_to(15, 5);
