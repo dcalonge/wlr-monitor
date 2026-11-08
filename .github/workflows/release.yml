@@ -47,32 +47,9 @@ jobs:
           mv target/${{ matrix.target }}/release/wlr-monitor \
             wlr-monitor-${{ matrix.target }}
 
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wlr-monitor-${{ matrix.target }}
-          path: wlr-monitor-${{ matrix.target }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: binaries
-          merge-multiple: true
-
-      - name: Create GitHub release and upload assets
+      - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: binaries/*
+          files: wlr-monitor-${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update flake.nix with real binary hashes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash .github/scripts/update_flake_hashes.sh
