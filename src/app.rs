@@ -396,7 +396,10 @@ impl App {
     }
 
     /// Edit the output at `index`, then drop the guides and say what changed.
+    /// A fresh change dismisses a stale apply failure so the UI does not stay
+    /// locked on an old error.
     fn edit(&mut self, index: usize, change: impl FnOnce(&mut Output) -> String) {
+        self.error = None;
         if let Some(output) = self.outputs.get_mut(index) {
             let what = change(output);
             self.status = format!("{}: {what}", output.name);

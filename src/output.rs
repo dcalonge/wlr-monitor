@@ -199,7 +199,9 @@ impl From<WlrOutput> for Output {
             mode,
             position: raw.position,
             transform: raw.transform,
-            scale: raw.scale,
+            // wlroots quantizes fractional scales (1.1 → 1.1015625), so snap
+            // back to a clean value the user recognizes.
+            scale: round_to(raw.scale, 2),
             adaptive_sync: raw.adaptive_sync,
             hdr: None,
             bit_depth: None,
@@ -562,6 +564,21 @@ pub mod tests {
         assert!(output.enabled && output.make.is_empty() && output.mode.is_none());
         assert_eq!(output.scale, 1.0);
         assert!(serde_json::from_str::<Output>(r#"{"name":"X","transform":"bad"}"#).is_err());
+    }
+
+    #[test]
+    fn quantized_scale_is_snapped_to_clean_value() {
+        let output: Output = serde_json::from_str(
+            r#"{"name":"X-1","scale":1.1015625}"#,
+        )
+        .unwrap();
+        assert_eq!(output.scale, 1.1);
+
+        let output: Output = serde_json::from_str(r#"{"name":"X-1","scale":1.1484375}"#).unwrap();
+        assert_eq!(output.scale, 1.15);
+
+        let output: Output = serde_json::from_str(r#"{"name":"X-1","scale":1.0}"#).unwrap();
+        assert_eq!(output.scale, 1.0);
     }
 
     #[test]

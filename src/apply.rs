@@ -2,6 +2,11 @@
 
 use crate::output::{Mode, Output, OutputState};
 
+/// How far the live scale reported by the compositor may differ from the
+/// requested scale before verification fails. wlroots quantizes fractional
+/// scales (1.1 → 1.1015625), so a small tolerance is needed.
+pub const SCALE_TOLERANCE: f64 = 0.01;
+
 /// The outcome for one output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyResult {
@@ -68,10 +73,13 @@ pub fn verify_layout(
         let mode_mismatch = state.mode.is_some()
             && live_output.mode.is_some()
             && state.mode.as_ref().map(Mode::key) != live_output.mode.as_ref().map(Mode::key);
+        // wlroots quantizes fractional scales to 1/128 (1.1 becomes
+        // 1.1015625), so accept a small tolerance instead of demanding
+        // bit-exact equality.
         if state.enabled != live_output.enabled
             || mode_mismatch
             || state.position != live_output.position
-            || (state.scale - live_output.scale).abs() > 0.0001
+            || (state.scale - live_output.scale).abs() > SCALE_TOLERANCE
             || state.transform != live_output.transform
             || state.adaptive_sync != live_output.adaptive_sync
         {

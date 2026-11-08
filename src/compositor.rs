@@ -1005,4 +1005,26 @@ esac"#,
         assert!(!applied.succeeded());
         assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
     }
+
+    #[test]
+    fn wlr_randr_accepts_wlroots_quantized_scale() {
+        let home = tempfile::tempdir().unwrap();
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","enabled":true,"modes":[{"width":1920,"height":1080,"refresh":100,"current":true,"preferred":true}],"position":{"x":0,"y":0},"transform":"normal","scale":1.1015625,"adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let c = compositor(Kind::Wlroots, home.path());
+        let layout = fixture_outputs();
+        let mut states: Vec<_> = layout.iter().map(Output::state).collect();
+        // wlroots quantizes 1.1 to 1.1015625; verification must tolerate that.
+        states[0].scale = 1.1;
+
+        let applied = c.apply(&wlr, &states, &layout, Some("p")).unwrap();
+        assert!(applied.succeeded());
+    }
 }
