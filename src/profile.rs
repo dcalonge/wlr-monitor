@@ -20,17 +20,11 @@ use crate::output::{Output, OutputState, match_state};
 
 const SCHEMA_VERSION: u32 = 2;
 
-/// Names the profile browser uses for its own entries.
-const RESERVED_NAMES: [&str; 2] = ["__save__", "__launch__"];
-
 /// Check and clean up a profile name.
 pub fn validate_name(name: &str) -> Result<&str> {
     let name = name.trim();
     if name.is_empty() {
         bail!("Profile name must not be empty.");
-    }
-    if RESERVED_NAMES.contains(&name) {
-        bail!("That profile name is reserved.");
     }
     // Names are written into compositor config comments, so no newlines.
     if name
@@ -359,7 +353,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_names() {
-        for name in ["", "  ", "__save__", "a/b", "a\nb"] {
+        for name in ["", "  ", "a/b", "a\nb"] {
             assert!(validate_name(name).is_err(), "{name:?}");
         }
     }

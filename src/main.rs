@@ -1,12 +1,20 @@
+mod app;
 mod apply;
 mod backend;
 mod cli;
 mod commands;
 mod compositor;
+mod dialog;
 mod exec;
 mod fsutil;
+mod handler;
+mod layout;
+mod notification;
 mod output;
 mod profile;
+mod theme;
+mod tui;
+mod ui;
 mod wlr_randr;
 
 use std::io::ErrorKind;
@@ -15,6 +23,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::Parser;
 
+use app::App;
 use backend::Backend;
 use cli::Args;
 use compositor::{Compositor, Kind};
@@ -49,6 +58,6 @@ fn run(args: &Args) -> Result<ExitCode> {
     if let Some(result) = commands::run(args, &store, &mut backend) {
         return result;
     }
-    // TUI: ported in the next step.
+    tui::run(App::new(backend, store, args.profiles_only()))?;
     Ok(ExitCode::SUCCESS)
 }

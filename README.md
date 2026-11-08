@@ -110,7 +110,7 @@ wlr-monitor --cfg ~/.config/wlr-monitor
 ```
 
 `--cfg` accepts either a directory (then `profiles.json` is read inside it) or
-a JSON file directly. `--compositor auto|wlroots|mango|sway|niri` overrides
+a JSON file directly. `--compositor wlroots|mango|sway|niri` overrides
 detection, `--include PATH` changes the generated file and `--no-include`
 disables it (and ignores the state remembered from earlier applies).
 `-v` / `--version` prints the version.
@@ -143,6 +143,7 @@ the outputs and discards pending edits.
 | `p` | Save the current layout as a named profile |
 | `o` | Open the profile browser |
 | `Enter` (in browser) | Apply the highlighted profile |
+| `s` (in browser) | Save the current layout as a new profile |
 | `r` (in browser) | Rename the highlighted profile |
 | `d` (in browser) | Delete the highlighted profile (with confirmation) |
 | `Shift+↑` / `Shift+↓` (in browser) | Reorder profiles |
@@ -281,9 +282,7 @@ a restart — no start-up command needed. On other wlroots compositors, run
 bindsym $mod+Shift+p exec wlr-monitor --profile work
 ```
 
-Before modifying an existing profile file, the store writes a timestamped
-backup next to it (`profiles.json.bak.<epoch>`). The file and its directory are
-created with user-only permissions.
+The profile file and its directory are created with user-only permissions.
 
 ## Limitations
 
@@ -306,12 +305,19 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The crate is split into a pure data/geometry layer (`model.rs`, `layout.rs`),
-the `wlr-randr` wrapper (`wlr.rs`, `process.rs`), compositor integrations
-(`compositor.rs`), profiles (`profiles.rs`), the command line (`cli.rs`) and
-the ratatui UI (`theme.rs`, `widgets.rs`, `screens.rs`, `ui.rs`, `app.rs`).
-The UI logic is tested without a terminal: `App` takes key and mouse events
-and is drawn into ratatui's test backend.
+Layout of `src/`, as in other ratatui apps (binary crate, no library):
+
+- `main.rs`, `cli.rs`, `commands.rs`: startup, arguments and the non-TUI commands
+- `tui.rs`, `handler.rs`, `app.rs` (+ `app/dialogs.rs`), `dialog.rs`: terminal
+  setup and event loop, keys and mouse, editor state and actions, dialog state
+- `ui.rs` (+ `ui/dialogs.rs`), `theme.rs`, `notification.rs`: drawing
+- `output.rs`, `layout.rs`, `profile.rs`: outputs, map geometry and snapping, profiles
+- `wlr_randr.rs`, `exec.rs`, `backend.rs`, `apply.rs`, `compositor.rs`
+  (+ `compositor/`), `fsutil.rs`: `wlr-randr`, compositor config and files
+
+`App` is driven by plain method calls and drawn into ratatui's test backend, so
+the editor is tested without a terminal; `tests/cli.rs` runs the binary
+against a fake `wlr-randr`.
 
 ## License
 

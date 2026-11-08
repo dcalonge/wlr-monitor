@@ -96,16 +96,6 @@ pub struct Mode {
 }
 
 impl Mode {
-    pub fn new(width: i32, height: i32, refresh: f64) -> Self {
-        Self {
-            width,
-            height,
-            refresh,
-            preferred: false,
-            current: false,
-        }
-    }
-
     pub fn key(&self) -> ModeKey {
         (
             self.width,
@@ -289,7 +279,7 @@ impl Output {
     }
 
     /// Size in layout pixels: the mode divided by the scale, rotated.
-    pub fn logical_size(&self) -> (i64, i64) {
+    pub fn logical_size(&self) -> (i32, i32) {
         let Some(mode) = &self.mode else {
             return (0, 0);
         };
@@ -300,8 +290,8 @@ impl Output {
             std::mem::swap(&mut width, &mut height);
         }
         (
-            (width.round() as i64).max(1),
-            (height.round() as i64).max(1),
+            (width.round() as i32).max(1),
+            (height.round() as i32).max(1),
         )
     }
 
@@ -483,6 +473,17 @@ pub fn disables_everything(current: &[(String, bool)], states: &[OutputState]) -
         .iter()
         .any(|state| state.enabled && !current.iter().any(|(name, _)| *name == state.name));
     (!current.is_empty() || !states.is_empty()) && !any_current && !any_extra
+}
+
+/// How a color profile (a preset name or `icc:/path`) reads in the UI.
+pub fn color_profile_label(profile: Option<&str>) -> String {
+    match profile {
+        None | Some("") => "default".into(),
+        Some(profile) => match profile.strip_prefix("icc:") {
+            Some(path) => format!("ICC {path}"),
+            None => profile.into(),
+        },
+    }
 }
 
 /// The scale presets, plus `current` when it is not one of them.
