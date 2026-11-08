@@ -12,6 +12,7 @@ mod sway;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::apply::{Applied, ApplyResult};
+use crate::apply::{Applied, ApplyResult, verify_layout};
 use crate::exec::{run_tool, which};
 use crate::fsutil::{write_if_changed, xdg_dir};
 use crate::output::{Output, OutputState, is_printable, match_state};
@@ -156,6 +157,27 @@ pub struct Written {
     pub path: PathBuf,
     /// Set when only the sidecar state file could not be written.
     pub warning: Option<String>,
+}
+
+/// The include and sidecar contents from before a write.
+#[derive(Debug)]
+pub struct IncludeBackup {
+    include: Option<Vec<u8>>,
+    sidecar: Option<Vec<u8>>,
+}
+
+fn restore_file(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
+    match bytes {
+        Some(bytes) => write_if_changed(path, bytes, 0o644)
+            .with_context(|| format!("Could not restore {}", path.display())),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("Could not remove {}", path.display()))
+            }
+        },
+    }
 }
 
 /// Shared by all outputs while rendering one include.
@@ -391,8 +413,10 @@ impl Compositor {
 
     /// Clear settings this compositor (version) cannot apply.
     ///
-    /// Called after reading and after copying a profile onto the outputs, so
-    /// a profile saved on another compositor does not show phantom changes.
+    /// Used after reading the live outputs and by `--print-config`, so a
+    /// profile saved on another compositor does not show phantom changes.
+    /// Unsupported settings are not shown in the UI and are silently dropped
+    /// from profiles rather than refused.
     pub fn drop_unsupported(&self, outputs: &mut [Output]) {
         for output in outputs {
             if !self.capabilities.hdr {
@@ -630,6 +654,24 @@ impl Compositor {
         }))
     }
 
+    /// The previous include and sidecar contents, used to undo a write when
+    /// the compositor rejects the new settings.
+    pub fn backup_include(&self) -> IncludeBackup {
+        IncludeBackup {
+            include: self.include.as_deref().and_then(|path| fs::read(path).ok()),
+            sidecar: fs::read(self.state_path()).ok(),
+        }
+    }
+
+    /// Put back a backup made by `backup_include`.
+    pub fn restore_include(&self, backup: &IncludeBackup) -> Result<()> {
+        let Some(path) = self.include.as_deref().filter(|_| self.include_enabled) else {
+            return Ok(());
+        };
+        restore_file(path, backup.include.as_deref())?;
+        restore_file(&self.state_path(), backup.sidecar.as_deref())
+    }
+
     // Applying
 
     /// Apply `states` live. `layout` is the full layout the include gets
@@ -642,16 +684,27 @@ impl Compositor {
         profile: Option<&str>,
     ) -> Result<Applied> {
         match self.kind {
-            Kind::Wlroots => Ok(self.finish(wlr.apply(states), layout, profile)),
+            Kind::Wlroots => Ok(self.finish(wlr, wlr.apply(states), states, layout, profile)),
             Kind::Sway => sway::apply(self, wlr, states, layout, profile),
             Kind::Niri => niri::apply(self, wlr, states, layout, profile),
             Kind::Mango => mango::apply(self, wlr, states, layout, profile),
         }
     }
 
-    /// Write the include after a successful live apply.
-    fn finish(&self, mut applied: Applied, layout: &[Output], profile: Option<&str>) -> Applied {
-        if layout.is_empty() || !applied.succeeded() {
+    /// Check that the requested settings actually took effect, then write the include.
+    fn finish(
+        &self,
+        wlr: &WlrRandr,
+        mut applied: Applied,
+        states: &[OutputState],
+        layout: &[Output],
+        profile: Option<&str>,
+    ) -> Applied {
+        if !applied.succeeded() {
+            return applied;
+        }
+        self.verify_layout(wlr, states, &mut applied);
+        if !applied.succeeded() || layout.is_empty() {
             return applied;
         }
         match self.write_include(layout, profile) {
@@ -663,6 +716,24 @@ impl Compositor {
         applied
     }
 
+    /// Fail outputs whose live state (read back from wlr-randr) does not match
+    /// the requested settings. Covers enabled, mode, position, scale, transform
+    /// and VRR — anything a compositor command may have silently ignored.
+    fn verify_layout(&self, wlr: &WlrRandr, states: &[OutputState], applied: &mut Applied) {
+        let Ok(live) = wlr.read() else { return };
+        let failed = verify_layout(states, Some(&live), &applied.results);
+        for result in applied
+            .results
+            .iter_mut()
+            .filter(|result| result.error.is_none())
+        {
+            if failed.contains(&result.name) {
+                result.error =
+                    Some("the requested settings did not take effect on the output".to_string());
+            }
+        }
+    }
+
     /// Fall back to wlr-randr when the compositor's IPC tool is missing.
     fn apply_without_tool(
         &self,
@@ -671,7 +742,7 @@ impl Compositor {
         layout: &[Output],
         profile: Option<&str>,
     ) -> Applied {
-        let mut applied = self.finish(wlr.apply(states), layout, profile);
+        let mut applied = self.finish(wlr, wlr.apply(states), states, layout, profile);
         applied.warnings.push(format!(
             "{} was not found on PATH; applied with wlr-randr, so HDR and color settings were skipped.",
             self.tool
@@ -767,7 +838,13 @@ mod tests {
         c.tool = script(
             home.path(),
             "swaymsg",
-            &format!("echo \"$@\" >> {}", log.display()),
+            &format!(
+                r#"case "$*" in
+    *get_outputs*) echo '[{{"name":"eDP-1","adaptive_sync_status":"enabled"}}]' ;;
+    *) echo "$@" >> {} ;;
+esac"#,
+                log.display()
+            ),
         );
         let wlr = WlrRandr::new(Some("/nonexistent"));
         let mut states: Vec<_> = fixture_outputs().iter().map(Output::state).collect();
@@ -781,5 +858,151 @@ mod tests {
         assert!(log.starts_with("-- output \"eDP-1\" enable"), "{log}");
         assert!(log.contains("-- output \"HDMI-A-1\" disable"), "{log}");
         assert!(c.include_path().unwrap().exists());
+    }
+
+    #[test]
+    fn sway_fails_when_vrr_does_not_take_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let mut c = compositor(Kind::Sway, home.path());
+        c.tool = script(
+            home.path(),
+            "swaymsg",
+            r#"case "$*" in
+    *get_outputs*) echo '[{"name":"HDMI-A-1","adaptive_sync_status":"disabled"}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let mut layout = fixture_outputs();
+        layout[0].adaptive_sync = true;
+        let mut states: Vec<_> = layout.iter().map(Output::state).collect();
+        for state in &mut states {
+            state.adaptive_sync = state.name == "HDMI-A-1";
+        }
+
+        let applied = c.apply(&wlr, &states, &layout, Some("p")).unwrap();
+        assert!(!applied.succeeded());
+        assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
+        assert!(!c.include_path().unwrap().exists());
+    }
+
+    #[test]
+    fn mango_restores_the_include_when_vrr_does_not_take_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let mango = home.path().join(".config/mango");
+        fs::create_dir_all(&mango).unwrap();
+        let include = mango.join("wlr-monitor.conf");
+        fs::write(
+            mango.join("config.conf"),
+            format!("source_optional={}\n", include.display()),
+        )
+        .unwrap();
+        let mut c = compositor(Kind::Mango, home.path());
+        c.tool = script(
+            home.path(),
+            "mmsg",
+            r#"case "$*" in
+    *"get all-monitors"*) echo '{"monitors":[{"name":"HDMI-A-1","is_hdr":false,"is_vrr":false}]}' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let mut layout = fixture_outputs();
+        layout[0].adaptive_sync = true;
+        let mut states: Vec<_> = layout.iter().map(Output::state).collect();
+        for state in &mut states {
+            state.adaptive_sync = state.name == "HDMI-A-1";
+        }
+
+        let applied = c.apply(&wlr, &states, &layout, Some("p")).unwrap();
+        assert!(!applied.succeeded());
+        assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
+        // The include had to be written for mango to reload it, but it is
+        // restored because the setting did not take effect.
+        assert!(!include.exists());
+    }
+
+    #[test]
+    fn wlr_randr_fails_when_vrr_does_not_take_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let c = compositor(Kind::Wlroots, home.path());
+        let mut states: Vec<_> = fixture_outputs().iter().map(Output::state).collect();
+        for state in &mut states {
+            state.adaptive_sync = state.name == "HDMI-A-1";
+        }
+
+        // The wlroots integration has no include, so `layout` is empty.
+        let applied = c.apply(&wlr, &states, &[], Some("p")).unwrap();
+        assert!(!applied.succeeded());
+        assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
+    }
+
+    #[test]
+    fn wlr_randr_fails_when_mode_does_not_take_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","enabled":true,"modes":[{"width":1920,"height":1080,"refresh":60,"current":true,"preferred":false},{"width":1920,"height":1080,"refresh":100,"current":false,"preferred":true}],"position":{"x":0,"y":0},"transform":"normal","scale":1.0,"adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let c = compositor(Kind::Wlroots, home.path());
+        let layout = fixture_outputs();
+        let states: Vec<_> = layout.iter().map(Output::state).collect();
+        // Request the 100 Hz mode; wlr-randr reports 60 Hz as current.
+
+        let applied = c.apply(&wlr, &states, &layout, Some("p")).unwrap();
+        assert!(!applied.succeeded());
+        assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
+    }
+
+    #[test]
+    fn wlr_randr_fails_when_scale_does_not_take_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let tool = script(
+            home.path(),
+            "wlr-randr",
+            r#"case "$1" in
+    --json) echo '[{"name":"HDMI-A-1","enabled":true,"modes":[{"width":1920,"height":1080,"refresh":100,"current":true,"preferred":true}],"position":{"x":0,"y":0},"transform":"normal","scale":1.0,"adaptive_sync":false}]' ;;
+    *) exit 0 ;;
+esac"#,
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let c = compositor(Kind::Wlroots, home.path());
+        let layout = fixture_outputs();
+        let mut states: Vec<_> = layout.iter().map(Output::state).collect();
+        states[0].scale = 2.0;
+
+        let applied = c.apply(&wlr, &states, &layout, Some("p")).unwrap();
+        assert!(!applied.succeeded());
+        assert!(applied.failures().any(|failure| failure.name == "HDMI-A-1"));
     }
 }

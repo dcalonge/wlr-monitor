@@ -126,6 +126,7 @@ pub fn apply(
 ) -> Result<Applied> {
     let tool = c.tool_path();
     if !layout.is_empty() && c.include_enabled && c.include_is_sourced() {
+        let backup = c.backup_include();
         let mut warnings = Vec::new();
         warnings.extend(
             c.write_include(layout, profile)?
@@ -143,10 +144,26 @@ pub fn apply(
                 Ok(())
             }
         };
-        return Ok(Applied {
+        let mut applied = Applied {
             results: super::same_result(states, result),
             warnings,
-        });
+        };
+        // The include had to be written for mango to reload it, so check the
+        // result and put the old config back when settings did not take effect.
+        if applied.succeeded() && tool.is_some() {
+            c.verify_layout(wlr, states, &mut applied);
+            if !applied.succeeded() {
+                match c.restore_include(&backup) {
+                    Ok(()) => {
+                        if let Some(tool) = &tool {
+                            let _ = mmsg(tool, &["dispatch", "reload_config"]);
+                        }
+                    }
+                    Err(error) => applied.warnings.push(format!("{error:#}")),
+                }
+            }
+        }
+        return Ok(applied);
     }
 
     // Not sourced yet: apply what the protocol can do and explain the rest.
@@ -164,10 +181,11 @@ pub fn apply(
             }
         }
     }
-    let mut applied = c.finish(applied, layout, profile);
-    if states
-        .iter()
-        .any(|state| state.enabled && state.adaptive_sync)
+    let mut applied = c.finish(wlr, applied, states, layout, profile);
+    if applied.succeeded()
+        && states
+            .iter()
+            .any(|state| state.enabled && state.adaptive_sync)
     {
         let advice = if c.include_enabled {
             format!(

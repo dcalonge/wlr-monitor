@@ -58,7 +58,7 @@ impl Profile {
     /// Copy the saved settings onto the connected outputs they match.
     ///
     /// Outputs match by connector name, else by EDID id (see `match_state`).
-    /// Settings the compositor cannot apply still need `drop_unsupported`.
+    /// Settings the compositor cannot apply make the whole apply fail.
     pub fn apply_to(&self, outputs: &mut [Output]) -> Matched {
         let connected: Vec<OutputState> = outputs.iter().map(Output::state).collect();
         let mut matched = Matched::default();

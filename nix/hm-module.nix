@@ -26,6 +26,9 @@ let
   # mango's Home Manager module comes from the mango flake; only touch it
   # when it has been imported, so this module also works without it.
   hasMangoModule = options ? wayland.windowManager.mango.extraConfig;
+  # niri's module ships with Home Manager, but keep this module usable with
+  # older Home Manager versions that do not have it yet.
+  hasNiriModule = options ? wayland.windowManager.niri.extraConfig;
 in
 {
   options.programs.wlr-monitor = {
@@ -51,8 +54,10 @@ in
     '';
 
     niri.enable = lib.mkEnableOption ''
-      the niri integration: creates ~/.config/niri/wlr-monitor.kdl so an
-      `include "wlr-monitor.kdl"` line in the niri config never fails
+      the niri integration: creates ~/.config/niri/wlr-monitor.kdl and appends
+      `include optional=true "<absolute path>"` to
+      `wayland.windowManager.niri.extraConfig`
+        (requires niri 26.04 or newer for `optional=true`)
     '';
   };
 
@@ -65,6 +70,10 @@ in
           {
             assertion = !cfg.mango.enable || hasMangoModule;
             message = "programs.wlr-monitor.mango.enable needs mango's Home Manager module (wayland.windowManager.mango).";
+          }
+          {
+            assertion = !cfg.niri.enable || hasNiriModule;
+            message = "programs.wlr-monitor.niri.enable needs niri's Home Manager module (wayland.windowManager.niri).";
           }
         ];
 
@@ -92,6 +101,14 @@ in
           lib.mkAfter ''
 
             source_optional=${mangoInclude}
+          ''
+        );
+      })
+
+      (lib.optionalAttrs hasNiriModule {
+        wayland.windowManager.niri.extraConfig = lib.mkIf cfg.niri.enable (
+          lib.mkAfter ''
+            include optional=true "${niriInclude}"
           ''
         );
       })

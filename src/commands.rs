@@ -173,7 +173,6 @@ fn apply_profile(backend: &mut Backend, store: &ProfileStore, name: &str) -> Res
         .map(|o| (o.name.clone(), o.enabled))
         .collect();
     let matched = profile.apply_to(&mut outputs);
-    backend.compositor.drop_unsupported(&mut outputs);
     let states: Vec<OutputState> = outputs
         .iter()
         .filter(|output| matched.applied.contains(&output.name))

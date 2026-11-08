@@ -82,7 +82,7 @@ writable include files and adds the include line to the compositor config:
     enable = true;
     mango.enable = true; # needs mango's HM module (wayland.windowManager.mango)
     # sway.enable = true; # wayland.windowManager.sway
-    # niri.enable = true; # creates the file; add the include line yourself
+    # niri.enable = true; # wayland.windowManager.niri
   };
 }
 ```
@@ -173,7 +173,10 @@ profile from the browser or `--profile`) also writes the full layout to:
 `wlr-monitor --init-include` writes the file from the current layout and
 prints the exact line, and the TUI shows the line at start-up until it is
 present. On niri, which refuses a config whose include does not exist, the
-TUI also creates the file at start-up if it is missing. mango always uses
+TUI also creates the file at start-up if it is missing. The Home Manager
+module appends an absolute `include optional=true ".../niri/wlr-monitor.kdl"`
+line for niri (requires niri 26.04+ for `optional=true`), so the generated
+config also validates before the file exists. mango always uses
 `~/.config/mango`, whatever `XDG_CONFIG_HOME` says.
 
 Remove your own monitor/output rules for the same monitors: mango and niri
@@ -262,7 +265,11 @@ explicit display order and timestamps:
 
 `hdr`, `bit_depth` and `color_profile` are only stored when they are set, so
 older profiles keep working and never reset those settings. Settings the
-current compositor cannot apply are ignored when a profile is applied.
+compositor cannot do (for example HDR on niri) are not shown in the UI and are
+silently dropped from profiles. Settings a command accepts but never takes
+effect — mode, scale, position, transform, VRR — are caught by reading the
+live state back after applying: the apply is reported as failed, the generated
+config is not written, and the active profile stays as it was.
 
 Profiles match outputs by connector name first and by EDID hardware id as a
 fallback, so they keep working when the kernel renames a connector after a

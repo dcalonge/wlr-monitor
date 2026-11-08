@@ -103,10 +103,12 @@ pub fn apply(
         })
         .collect();
     Ok(c.finish(
+        wlr,
         Applied {
             results,
             warnings: Vec::new(),
         },
+        states,
         layout,
         profile,
     ))

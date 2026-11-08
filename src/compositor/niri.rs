@@ -173,10 +173,12 @@ pub fn apply(
         })
         .collect();
     Ok(c.finish(
+        wlr,
         Applied {
             results,
             warnings: Vec::new(),
         },
+        states,
         layout,
         profile,
     ))
@@ -195,11 +197,12 @@ pub fn enrich(c: &mut Compositor, outputs: &mut [Output], json: &str) {
     }
     let on_demand = on_demand_for(c, outputs).unwrap_or_default();
     for output in outputs {
+        let item = live.get(&output.name);
         if on_demand.get(&output.name).copied().unwrap_or(false) {
             // With on-demand VRR, vrr_enabled only reflects the focused
             // window; the include says VRR is on.
             output.adaptive_sync = true;
-        } else if let Some(vrr) = live.get(&output.name).and_then(|item| item.vrr_enabled) {
+        } else if let Some(vrr) = item.and_then(|item| item.vrr_enabled) {
             output.adaptive_sync = vrr;
         }
     }
@@ -271,6 +274,22 @@ pub fn preserved(text: &str) -> HashMap<String, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::tests::script;
+    use crate::output::tests::fixture_outputs;
+    use std::path::Path;
+
+    use super::super::Kind;
+
+    fn compositor(home: &Path) -> Compositor {
+        Compositor::with_dirs(
+            Kind::Niri,
+            None,
+            true,
+            home.into(),
+            home.join(".config"),
+            home.join(".state"),
+        )
+    }
 
     #[test]
     fn keeps_unmanaged_lines_and_on_demand_vrr() {
@@ -300,5 +319,71 @@ output "eDP-1" {
         );
         assert!(kept["eDP-1"].is_empty());
         assert!(is_on_demand(&kept["HDMI-A-1"]));
+    }
+
+    fn vrr_apply(home: &Path, niri_live: &str, wlr_live: &str) -> (Result<Applied>, Compositor) {
+        let mut c = compositor(home);
+        c.tool = script(
+            home,
+            "niri",
+            &format!(
+                r#"case "$*" in
+    *"--json outputs"*) echo '{niri_live}' ;;
+    *) exit 0 ;;
+esac"#
+            ),
+        );
+        let tool = script(
+            home,
+            "wlr-randr",
+            &format!(
+                r#"case "$1" in
+    --json) echo '{wlr_live}' ;;
+    *) exit 0 ;;
+esac"#
+            ),
+        );
+        let wlr = WlrRandr::new(Some(&tool));
+        let mut layout = fixture_outputs();
+        layout[0].adaptive_sync = true;
+        let mut states: Vec<_> = layout.iter().map(Output::state).collect();
+        for state in &mut states {
+            state.adaptive_sync = state.name == "HDMI-A-1";
+        }
+        (c.apply(&wlr, &states, &layout, Some("p")), c)
+    }
+
+    #[test]
+    fn fails_when_niri_accepts_vrr_but_does_not_enable_it() {
+        let home = tempfile::tempdir().unwrap();
+        let (applied, c) = vrr_apply(
+            home.path(),
+            r#"{"HDMI-A-1":{"vrr_enabled":false}}"#,
+            r#"[{"name":"HDMI-A-1","adaptive_sync":false}]"#,
+        );
+        let applied = applied.unwrap();
+        let failure = applied.failures().next().expect("VRR failure");
+        assert_eq!(failure.name, "HDMI-A-1");
+        assert!(
+            failure
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("did not take effect")
+        );
+        assert!(!c.include_path().unwrap().exists());
+    }
+
+    #[test]
+    fn writes_the_include_when_niri_reports_vrr_enabled() {
+        let home = tempfile::tempdir().unwrap();
+        let (applied, c) = vrr_apply(
+            home.path(),
+            r#"{"HDMI-A-1":{"vrr_enabled":true}}"#,
+            r#"[{"name":"HDMI-A-1","adaptive_sync":true}]"#,
+        );
+        assert!(applied.unwrap().succeeded());
+        let text = std::fs::read_to_string(c.include_path().unwrap()).unwrap();
+        assert!(text.contains("variable-refresh-rate"), "{text}");
     }
 }

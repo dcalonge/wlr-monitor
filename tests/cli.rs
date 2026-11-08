@@ -19,7 +19,7 @@ impl Env {
         fs::write(dir.path().join("outputs.json"), OUTPUTS).unwrap();
         let fake = dir.path().join("wlr-randr");
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = --json ]; then cat '{dir}/outputs.json'; else echo \"$@\" >> '{dir}/calls'; fi\n",
+            "#!/bin/sh\nSTATE='{dir}/outputs.json'\nif [ \"$1\" = --json ]; then\n  cat \"$STATE\"\nelse\n  echo \"$@\" >> '{dir}/calls'\n  scale=\"\"\n  while [ $# -gt 0 ]; do\n    if [ \"$1\" = --scale ]; then shift; scale=$1; fi\n    shift\n  done\n  if [ -n \"$scale\" ]; then\n    sed -i 's/\"scale\": [0-9.]*/\"scale\": $scale/' \"$STATE\"\n  fi\nfi\n",
             dir = dir.path().display()
         );
         fs::write(&fake, script).unwrap();

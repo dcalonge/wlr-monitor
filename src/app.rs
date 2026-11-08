@@ -393,7 +393,6 @@ impl App {
     pub fn toggle_snap(&mut self) {
         self.snap = !self.snap;
         self.guides.clear();
-        self.status = format!("Snap: {}", if self.snap { "on" } else { "off" });
     }
 
     /// Edit the output at `index`, then drop the guides and say what changed.
@@ -672,9 +671,6 @@ impl App {
         // they were.
         let mut outputs = self.outputs.clone();
         let matched = profile.apply_to(&mut outputs);
-        // A profile saved on another compositor may carry settings this one
-        // cannot apply; drop them so they don't show as pending.
-        self.backend.compositor.drop_unsupported(&mut outputs);
         let states: Vec<_> = outputs
             .iter()
             .filter(|output| matched.applied.contains(&output.name))
@@ -761,6 +757,7 @@ fn quantize(value: f64, grid: i32) -> i32 {
 mod tests {
     use super::*;
     use crate::compositor::Kind;
+    use crate::exec::tests::script;
     use crate::output::tests::fixture_outputs;
     use crate::wlr_randr::WlrRandr;
 
@@ -805,5 +802,41 @@ mod tests {
         app.drag_to(15, 5);
         assert!(app.outputs[0].position.x > 0);
         assert_eq!(app.outputs[0].position.x % 32, 0);
+    }
+
+    #[test]
+    fn snap_is_shown_once_in_the_status_line() {
+        let mut app = app();
+        app.toggle_snap();
+        let line = app.status_line();
+        assert_eq!(line.matches("snap").count(), 1, "{line}");
+        assert!(!line.contains("Snap:"), "{line}");
+    }
+
+    #[test]
+    fn an_unsupported_profile_setting_is_dropped_not_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let mut compositor = Compositor::with_dirs(
+            Kind::Niri,
+            None,
+            true,
+            home.path().into(),
+            home.path().join(".config"),
+            home.path().join(".state"),
+        );
+        compositor.tool = script(home.path(), "niri", "exit 0");
+        let backend = Backend::new(WlrRandr::new(Some("/nonexistent")), compositor);
+        let store = ProfileStore::new(Some(home.path().join("profiles.json")));
+        let mut app = App::new(backend, store, false);
+        app.set_outputs(fixture_outputs());
+
+        let mut states: Vec<_> = app.outputs.iter().map(Output::state).collect();
+        states[0].hdr = Some(true);
+        app.store.save("hdr", &states).unwrap();
+
+        // niri cannot do HDR, so the setting is silently dropped and the
+        // apply still succeeds; the active profile is updated.
+        assert!(app.apply_profile("hdr"));
+        assert_eq!(app.active_profile.as_deref(), Some("hdr"));
     }
 }
