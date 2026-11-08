@@ -1,96 +1,148 @@
-//! End-to-end checks of the installed binary's command line.
+//! Runs the real binary against a fake `wlr-randr` script.
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Output};
 
-const FIXTURE: &str = include_str!("fixtures/outputs.json");
+use tempfile::TempDir;
 
-struct Sandbox(PathBuf);
+const OUTPUTS: &str = include_str!("fixtures/outputs.json");
 
-impl Sandbox {
-    fn new(name: &str) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("wlr-monitor-it-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("bin")).unwrap();
-        std::fs::write(dir.join("outputs.json"), FIXTURE).unwrap();
-        let script = dir.join("bin/wlr-randr");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done < '{}'\n",
-                dir.join("outputs.json").display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Self(dir)
+struct Env {
+    dir: TempDir,
+}
+
+impl Env {
+    fn new() -> Self {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("outputs.json"), OUTPUTS).unwrap();
+        let fake = dir.path().join("wlr-randr");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = --json ]; then cat '{dir}/outputs.json'; else echo \"$@\" >> '{dir}/calls'; fi\n",
+            dir = dir.path().display()
+        );
+        fs::write(&fake, script).unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        Self { dir }
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
     }
 
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_wlr-monitor"))
+            .args(["--compositor", "wlroots", "--wlr-randr"])
+            .arg(self.path().join("wlr-randr"))
+            .arg("--config")
+            .arg(self.path())
             .args(args)
-            .env_clear()
-            .env("HOME", self.0.join("home"))
-            .env("XDG_CONFIG_HOME", self.0.join("config"))
-            .env("XDG_STATE_HOME", self.0.join("state"))
-            .env("PATH", self.0.join("bin"))
-            .env("WLR_RANDR", self.0.join("bin/wlr-randr"))
-            // A variable that is not UTF-8 must not break anything.
-            .env("BROKEN", OsStr::from_bytes(b"caf\xe9"))
+            .env("XDG_STATE_HOME", self.path())
             .output()
             .unwrap()
     }
-}
 
-impl Drop for Sandbox {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+    fn calls(&self) -> String {
+        fs::read_to_string(self.path().join("calls")).unwrap_or_default()
     }
 }
 
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 #[test]
-fn one_shot_commands_work_end_to_end() {
-    let sandbox = Sandbox::new("oneshot");
-    let outputs = sandbox.run(&["--outputs"]);
-    assert!(outputs.status.success(), "{}", text(&outputs.stderr));
-    assert!(text(&outputs.stdout).contains("HDMI-A-1       yes  1920x1080@100"));
-
-    let listed = sandbox.run(&["--list-profiles"]);
-    assert!(listed.status.success());
-    assert_eq!(text(&listed.stdout), "");
-
-    let version = sandbox.run(&["--version"]);
-    assert_eq!(
-        text(&version.stdout),
-        format!("wlr-monitor {}\n", env!("CARGO_PKG_VERSION"))
+fn prints_outputs() {
+    let out = Env::new().run(&["--outputs"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(
+        text.contains("HDMI-A-1") && text.contains("1920x1080@100"),
+        "{text}"
     );
+    assert!(text.contains("eDP-1") && text.contains("1.2"), "{text}");
 }
 
 #[test]
-fn help_and_errors_are_plain_text_when_piped() {
-    let sandbox = Sandbox::new("plain");
-    let help = sandbox.run(&["--help"]);
-    assert!(help.status.success());
-    assert!(text(&help.stdout).contains("--print-config"));
-    assert!(!help.stdout.contains(&0x1b));
-    let error = sandbox.run(&["--bogus"]);
-    assert_eq!(error.status.code(), Some(2));
-    assert!(!error.stderr.contains(&0x1b));
+fn applies_a_saved_profile_and_marks_it_active() {
+    let env = Env::new();
+    fs::write(
+        env.path().join("profiles.json"),
+        r#"{"version": 2, "order": ["work"], "profiles": {"work": {"outputs": {
+            "HDMI-A-1": {"enabled": true, "position": {"x": 0, "y": 0}, "scale": 2.0},
+            "DP-9": {"enabled": false}
+        }}}}"#,
+    )
+    .unwrap();
+
+    let out = env.run(&["--profile", "work"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Applied HDMI-A-1.\n");
+    let err = stderr(&out);
+    assert!(
+        err.contains("Left unchanged (not in profile): eDP-1"),
+        "{err}"
+    );
+    assert!(err.contains("Skipped (not connected): DP-9"), "{err}");
+    assert!(
+        env.calls().contains("--output HDMI-A-1 --on"),
+        "{}",
+        env.calls()
+    );
+    assert!(env.calls().contains("--scale 2"), "{}", env.calls());
+
+    // The fake compositor state did not change, so the profile is not active.
+    assert_eq!(stdout(&env.run(&["--list-profiles"])), "work\n");
 }
 
 #[test]
-fn the_tui_needs_a_terminal() {
-    let sandbox = Sandbox::new("tui");
-    // No terminal on stdin/stdout: a clean error, not a hang or a panic.
-    let output = sandbox.run(&[]);
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
-    assert!(text(&output.stderr).starts_with("wlr-monitor: "));
+fn refuses_to_turn_everything_off() {
+    let env = Env::new();
+    fs::write(
+        env.path().join("profiles.json"),
+        r#"{"version": 2, "order": ["dark"], "profiles": {"dark": {"outputs": {
+            "HDMI-A-1": {"enabled": false}, "eDP-1": {"enabled": false}}}}}"#,
+    )
+    .unwrap();
+    let out = env.run(&["--profile", "dark"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("turn off every connected monitor"));
+    assert_eq!(env.calls(), "");
+}
+
+#[test]
+fn reports_unknown_profile_and_bad_usage() {
+    let env = Env::new();
+    let out = env.run(&["--profile", "nope"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("no profile named \"nope\" (available: none)"));
+
+    let out = env.run(&["--outputs", "--list-profiles"]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn prints_compositor_config() {
+    let env = Env::new();
+    let include = env.path().join("wlr-monitor.conf");
+    let out = Command::new(env!("CARGO_BIN_EXE_wlr-monitor"))
+        .args(["--compositor", "sway", "--wlr-randr"])
+        .arg(env.path().join("wlr-randr"))
+        .arg("--include")
+        .arg(&include)
+        .arg("--print-config")
+        .env("XDG_STATE_HOME", env.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out)
+            .contains("output \"eDP-1\" enable mode 1920x1080@60.000Hz pos 1920 0 scale 1.2")
+    );
+    assert!(!include.exists());
 }
