@@ -11,6 +11,14 @@
         "aarch64-linux"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
+      # Prebuilt binary version. Update this + the sha256 placeholders below
+      # after each GitHub release is built by .github/workflows/release.yml.
+      binVersion = "0.2.1";
+      binSha256 = {
+        "x86_64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        "aarch64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      };
     in
     {
       packages = forAllSystems (
@@ -47,10 +55,32 @@
               platforms = lib.platforms.linux;
             };
           };
+
+          # Prebuilt binary from a GitHub release, pinned to a version.
+          # Replace the fake sha256 with the real one from nix-prefetch-url.
+          wlr-monitor-bin = pkgs.fetchurl {
+            url = "https://github.com/dcalonge/wlr-monitor/releases/download/v${binVersion}/wlr-monitor-${binVersion}-${system}";
+            sha256 = binSha256.${system};
+          };
+
+          # Prebuilt binary from the latest GitHub release.
+          # Requires --impure when evaluating the flake (network access).
+          wlr-monitor-bin-latest = let
+            latest = builtins.fromJSON (builtins.fetchurl {
+              url = "https://api.github.com/repos/dcalonge/wlr-monitor/releases/latest";
+            });
+            version = latest.tag_name;
+          in
+          pkgs.fetchurl {
+            url = "https://github.com/dcalonge/wlr-monitor/releases/download/${version}/wlr-monitor-${version}-${system}";
+            sha256 = lib.fakeSha256;
+          };
         in
         {
           default = wlr-monitor;
           wlr-monitor = wlr-monitor;
+          wlr-monitor-bin = wlr-monitor-bin;
+          wlr-monitor-bin-latest = wlr-monitor-bin-latest;
         }
       );
 
