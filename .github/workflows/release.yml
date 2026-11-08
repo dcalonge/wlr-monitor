@@ -36,7 +36,11 @@ jobs:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           fi
           cargo build --release --target ${{ matrix.target }}
-          strip target/${{ matrix.target }}/release/wlr-monitor
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            aarch64-linux-gnu-strip target/${{ matrix.target }}/release/wlr-monitor
+          else
+            strip target/${{ matrix.target }}/release/wlr-monitor
+          fi
 
       - name: Stage binary
         run: |
