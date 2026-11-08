@@ -15,7 +15,7 @@ print(base64.b32encode(digest).decode().lower())
 hash_x86=$(compute_hash binaries/wlr-monitor-x86_64-unknown-linux-gnu)
 hash_arm=$(compute_hash binaries/wlr-monitor-aarch64-unknown-linux-gnu)
 
-python3 - <<'PYEOF'
+python3 - "$version" "$hash_x86" "$hash_arm" <<'PYEOF'
 import re, sys
 version = sys.argv[1]
 hash_x86 = sys.argv[2]
