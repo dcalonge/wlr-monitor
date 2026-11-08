@@ -82,17 +82,17 @@ jobs:
           # Nix sha256 is base32 of the raw sha256 digest.
           compute_hash() {
             python3 -c "
-import hashlib, base64, sys
-with open(sys.argv[1], 'rb') as f:
-    digest = hashlib.sha256(f.read()).digest()
-print(base64.b32encode(digest).decode().lower())
-" "$1"
+                import hashlib, base64, sys
+                with open(sys.argv[1], 'rb') as f:
+                    digest = hashlib.sha256(f.read()).digest()
+                print(base64.b32encode(digest).decode().lower())
+            " "$1"
           }
 
           hash_x86=$(compute_hash binaries/wlr-monitor-x86_64-unknown-linux-gnu)
           hash_arm=$(compute_hash binaries/wlr-monitor-aarch64-unknown-linux-gnu)
 
-          python3 - <<EOF
+          python3 - <<'EOF'
 import re
 with open('flake.nix') as f:
     content = f.read()
