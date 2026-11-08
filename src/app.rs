@@ -40,6 +40,8 @@ pub struct Areas {
     pub draw_order: Vec<usize>,
     /// The table rows that show outputs, one line each.
     pub table_rows: Rect,
+    /// The first output shown by the (possibly scrolled) table.
+    pub table_offset: usize,
 }
 
 impl Areas {
@@ -61,7 +63,7 @@ impl Areas {
 impl Areas {
     /// The output whose table row is at this screen cell.
     pub fn table_row_at(&self, column: u16, row: u16, count: usize) -> Option<usize> {
-        let index = usize::from(row.checked_sub(self.table_rows.y)?);
+        let index = self.table_offset + usize::from(row.checked_sub(self.table_rows.y)?);
         (self.table_rows.contains((column, row).into()) && index < count).then_some(index)
     }
 }
@@ -211,7 +213,7 @@ impl App {
     pub fn status_line(&self) -> String {
         let mut parts = vec![
             format!("grid {}px", self.grid),
-            format!("snap {}", if self.snap { "on" } else { "off" }),
+            format!("snap {}", if self.snap { "Edges" } else { "Off" }),
         ];
         if let Some(profile) = &self.active_profile {
             parts.push(format!("profile {profile}"));

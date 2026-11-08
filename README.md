@@ -23,7 +23,7 @@ foot / kitty / alacritty theme without configuration.
  ┃    ┃                              ┃│        VRR x1.2        │    ┃
  ┃    ┃                              ┃└────────────────────────┘    ┃
  ┃    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                              ┃
- ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ grid 32px · snap on · Ready. ━┛
+ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ grid 32px · snap Edges · Ready. ━┛
  ┌─ Outputs ──────────────────────────────────────────────────────────┐
  │          Name           Mode      State Scale   Position  VRR      │
  │                                                                    │
