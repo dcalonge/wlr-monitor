@@ -14,8 +14,9 @@ use crate::{handler, ui};
 const IDLE: Duration = Duration::from_secs(3600);
 
 pub fn run(mut app: App) -> Result<()> {
-    let mut terminal = ratatui::init();
-    // `ratatui::init` restores the terminal on panic; mouse capture is ours to undo.
+    let mut terminal =
+        ratatui::try_init().map_err(|error| anyhow::anyhow!("cannot start the TUI: {error}"))?;
+    // `ratatui::try_init` restores the terminal on panic; mouse capture is ours to undo.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
