@@ -16,38 +16,35 @@
       packages = forAllSystems (
         pkgs:
         let
-          python = pkgs.python3;
-          wlr-monitor = python.pkgs.buildPythonApplication {
-            pname = "wlr-monitor";
-            version = "0.1.0";
-            format = "pyproject";
-            src = ./.;
+          inherit (pkgs) lib;
+          manifest = (lib.importTOML ./Cargo.toml).package;
+          wlr-monitor = pkgs.rustPlatform.buildRustPackage {
+            pname = manifest.name;
+            inherit (manifest) version;
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./Cargo.toml
+                ./Cargo.lock
+                ./src
+                ./tests/fixtures
+              ];
+            };
+            cargoLock.lockFile = ./Cargo.lock;
 
-            nativeBuildInputs = [
-              python.pkgs.setuptools
-              python.pkgs.wheel
-              pkgs.makeWrapper
-            ];
-            propagatedBuildInputs = [ python.pkgs.textual ];
-            nativeCheckInputs = [ python.pkgs.pytest ];
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              python -m pytest -q
-              runHook postCheck
-            '';
-
+            # A compiled wrapper: no shell start-up on every launch.
+            nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
             postFixup = ''
               wrapProgram $out/bin/wlr-monitor \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.wlr-randr ]}
+                --prefix PATH : ${lib.makeBinPath [ pkgs.wlr-randr ]}
             '';
 
             meta = {
               description = "A TUI monitor-layout editor for wlroots compositors";
               homepage = "https://github.com/dcalonge/wlr-monitor";
-              license = pkgs.lib.licenses.mit;
+              license = lib.licenses.mit;
               mainProgram = "wlr-monitor";
-              platforms = pkgs.lib.platforms.linux;
+              platforms = lib.platforms.linux;
             };
           };
         in
@@ -57,27 +54,19 @@
         }
       );
 
-      devShells = forAllSystems (
-        pkgs:
-        let
-          python = pkgs.python3.withPackages (ps: [
-            ps.pytest
-            ps.ruff
-            ps.textual
-          ]);
-        in
-        {
-          default = pkgs.mkShell {
-            packages = [
-              python
-              pkgs.wlr-randr
-            ];
-            shellHook = ''
-              export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
-            '';
-          };
-        }
-      );
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.clippy
+            pkgs.rustfmt
+            pkgs.rust-analyzer
+            pkgs.wlr-randr
+          ];
+          env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+        };
+      });
 
       # Home Manager module: installs the package, creates the writable
       # include files and hooks them into the mango / sway configs.

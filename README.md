@@ -38,20 +38,22 @@ foot / kitty / alacritty theme without configuration.
 
 - Linux with a wlroots-based Wayland compositor.
 - `wlr-randr` on `PATH`.
-- Python 3.11+ and Textual 8.2.5+ (installed automatically by pip/pipx/uv).
 - `mmsg` / `swaymsg` / `niri` for the compositor integrations; they come with
   their compositors.
 - A terminal at least ~30×12. Mouse support is optional but enables dragging,
   right-click toggling and wheel scaling.
 
+wlr-monitor is a single native binary with no runtime dependencies: the TUI
+is drawn within a few milliseconds of starting, and quitting is immediate.
+
 ## Install
 
-### pipx / uv
+### Cargo
+
+Needs Rust 1.88 or newer.
 
 ```sh
-pipx install .
-# or
-uv tool install .
+cargo install --locked --path .
 ```
 
 ### Nix
@@ -145,7 +147,7 @@ the outputs and discards pending edits.
 | `d` (in browser) | Delete the highlighted profile (with confirmation) |
 | `Shift+↑` / `Shift+↓` (in browser) | Reorder profiles |
 | `?` | Show the scrollable help screen |
-| `q` / `Ctrl+C` | Quit |
+| `q` / `Ctrl+C` | Quit (`Ctrl+Q` quits from inside a dialog too) |
 
 The last enabled monitor cannot be disabled, and nothing (a profile, a revert,
 the advanced dialog) is applied if it would turn every monitor off.
@@ -298,16 +300,18 @@ created with user-only permissions.
 ## Development
 
 ```sh
-nix develop          # Python + Textual + pytest + ruff
-pytest
-ruff check src tests
-ruff format --check src tests
+nix develop          # cargo, rustc, clippy, rustfmt, rust-analyzer, wlr-randr
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-The app is split into a pure data/geometry layer (`model.py`, `layout.py`),
-the `wlr-randr` wrapper (`wlr.py`), compositor integrations (`compositor.py`),
-profiles (`profiles.py`), and the Textual UI (`theme.py`, `widgets.py`,
-`screens.py`, `app.py`).
+The crate is split into a pure data/geometry layer (`model.rs`, `layout.rs`),
+the `wlr-randr` wrapper (`wlr.rs`, `process.rs`), compositor integrations
+(`compositor.rs`), profiles (`profiles.rs`), the command line (`cli.rs`) and
+the ratatui UI (`theme.rs`, `widgets.rs`, `screens.rs`, `ui.rs`, `app.rs`).
+The UI logic is tested without a terminal: `App` takes key and mouse events
+and is drawn into ratatui's test backend.
 
 ## License
 
