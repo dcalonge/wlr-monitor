@@ -12,12 +12,12 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Prebuilt binary version. Update this + the sha256 placeholders below
-      # after each GitHub release is built by .github/workflows/release.yml.
-      binVersion = "0.2.1";
+      # Prebuilt binary version. Automatically updated by the release
+      # workflow (.github/workflows/release.yml) on every version tag.
+      binVersion = "0.2.5";
       binSha256 = {
-        "x86_64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-        "aarch64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        "x86_64-linux" = "sha256-REPLACE_X86_64";
+        "aarch64-linux" = "sha256-REPLACE_AARCH64";
       };
     in
     {

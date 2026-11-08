@@ -24,7 +24,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross linker for aarch64
+      - name: Install cross toolchain for aarch64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
@@ -47,9 +47,71 @@ jobs:
           mv target/${{ matrix.target }}/release/wlr-monitor \
             wlr-monitor-${{ matrix.target }}
 
-      - name: Upload release asset
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlr-monitor-${{ matrix.target }}
+          path: wlr-monitor-${{ matrix.target }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: true
+
+      - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          files: wlr-monitor-${{ matrix.target }}
+          files: binaries/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update flake.nix with real binary hashes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          version="${GITHUB_REF_NAME}"
+
+          # Nix sha256 is base32 of the raw sha256 digest.
+          compute_hash() {
+            python3 -c "
+import hashlib, base64, sys
+with open(sys.argv[1], 'rb') as f:
+    digest = hashlib.sha256(f.read()).digest()
+print(base64.b32encode(digest).decode().lower())
+" "$1"
+          }
+
+          hash_x86=$(compute_hash binaries/wlr-monitor-x86_64-unknown-linux-gnu)
+          hash_arm=$(compute_hash binaries/wlr-monitor-aarch64-unknown-linux-gnu)
+
+          python3 - <<EOF
+import re
+with open('flake.nix') as f:
+    content = f.read()
+
+    content = re.sub(
+        r'binVersion = ".*"',
+        f'binVersion = "{version}"',
+        content
+    )
+    content = content.replace('sha256-REPLACE_X86_64', hash_x86)
+    content = content.replace('sha256-REPLACE_AARCH64', hash_arm)
+
+    with open('flake.nix', 'w') as f:
+        f.write(content)
+EOF
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/dcalonge/wlr-monitor.git"
+          git add flake.nix
+          git commit -m "Update flake.nix bin hashes for ${version} [skip ci]" || true
+          git push origin master || true
