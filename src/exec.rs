@@ -2,7 +2,7 @@
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -54,11 +54,7 @@ pub fn which(program: &str) -> Option<PathBuf> {
 
 /// Returns whether the command succeeded, with its stdout and stderr.
 fn run(command: &mut Command, timeout: Duration) -> io::Result<(bool, String, String)> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut child = spawn(command)?;
     // Drain both pipes while waiting, so a chatty tool cannot block on a full pipe.
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
@@ -69,6 +65,26 @@ fn run(command: &mut Command, timeout: Duration) -> io::Result<(bool, String, St
     };
     let join = |handle: JoinHandle<String>| handle.join().unwrap_or_default();
     Ok((status.success(), join(stdout), join(stderr)))
+}
+
+/// Spawns `command` with null stdin and piped stdout and stderr.
+fn spawn(command: &mut Command) -> io::Result<Child> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Another thread's fork can hold the write handle of a file we just made,
+    // so our exec briefly sees ETXTBSY. It clears at once.
+    let mut tries = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && tries < 100 => {
+                tries += 1;
+                thread::sleep(Duration::from_millis(1));
+            }
+            result => return result,
+        }
+    }
 }
 
 fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<String> {
